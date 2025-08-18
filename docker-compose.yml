@@ -1,0 +1,25 @@
+services:
+  ollamaintegrationapi:
+    build:
+      context: .
+      dockerfile: OllamaIntegrationAPI/Dockerfile
+    ports:
+      - "5000:8080"
+    depends_on:
+      - ollama
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+      - OLLAMA_HOST=http://ollama:11434
+    volumes:
+      - ./tessdata:/app/tessdata
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_models:
