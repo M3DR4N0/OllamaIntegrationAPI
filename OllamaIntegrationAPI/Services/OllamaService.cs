@@ -28,17 +28,35 @@ namespace OllamaIntegrationAPI.Services
         {
             var tokenCount = GptEncoding.GetEncoding("cl100k_base").CountTokens(request.Prompt) + 2000;
 
-            var payload = new
+            object payload;
+
+            if (request.Format is not null)
             {
-                request.Model,
-                request.Prompt,
-                request.Format,
-                request.Stream,
-                Options = new
+                payload = new
                 {
-                    num_ctx = tokenCount
-                }
-            };
+                    request.Model,
+                    request.Prompt,
+                    request.Stream,
+                    Options = new
+                    {
+                        num_ctx = tokenCount
+                    },
+                    request.Format
+                };
+            }
+            else
+            {
+                payload = new
+                {
+                    request.Model,
+                    request.Prompt,
+                    request.Stream,
+                    Options = new
+                    {
+                        num_ctx = tokenCount
+                    }
+                };
+            }
 
             var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
             var response = await _httpClient.PostAsync("api/generate", content);
