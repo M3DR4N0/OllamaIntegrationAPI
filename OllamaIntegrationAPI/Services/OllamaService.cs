@@ -30,7 +30,11 @@ namespace OllamaIntegrationAPI.Services
                 request.Model,
                 request.Prompt,
                 request.Format,
-                request.Stream
+                request.Stream,
+                Options = new
+                {
+                    num_ctx = 100000
+                }
             };
 
             var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
