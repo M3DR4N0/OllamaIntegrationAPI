@@ -1,5 +1,6 @@
 ﻿using OllamaIntegrationAPI.Models;
 using OllamaIntegrationAPI.Models.Response;
+using SharpToken;
 using System.Net.Http;
 using System.Reflection;
 using System.Text;
@@ -27,8 +28,7 @@ namespace OllamaIntegrationAPI.Services
         {
             int palabras = request.Prompt.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
 
-            // Aproximación de tokens
-            double tokens = (palabras / 0.75) + 1000;
+            var tokenCount = GptEncoding.GetEncoding("cl100k_base").CountTokens(request.Prompt);
 
             var payload = new
             {
@@ -38,7 +38,7 @@ namespace OllamaIntegrationAPI.Services
                 request.Stream,
                 Options = new
                 {
-                    num_ctx = tokens
+                    num_ctx = tokenCount
                 }
             };
 
