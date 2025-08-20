@@ -25,6 +25,11 @@ namespace OllamaIntegrationAPI.Services
 
         public async Task<IResponse> ExtractContractInfoAsync(OllamaRequest request)
         {
+            int palabras = request.Prompt.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+
+            // Aproximación de tokens
+            double tokens = (palabras / 0.75) + 1000;
+
             var payload = new
             {
                 request.Model,
@@ -33,7 +38,7 @@ namespace OllamaIntegrationAPI.Services
                 request.Stream,
                 Options = new
                 {
-                    num_ctx = 7000
+                    num_ctx = tokens
                 }
             };
 
