@@ -33,14 +33,20 @@ namespace OllamaIntegrationAPI.Services
                 throw new ArgumentNullException(nameof(fileStream));
 
             fileStream.Position = 0;
-            var ext = (fileExtension ?? "").ToLowerInvariant();
+   
 
-            return ext switch
+            return fileExtension switch
             {
                 //".txt" => ReadTxt(fileStream),
-                ".docx" => ReadDocx(fileStream),
-                ".pdf" => await ExtractTextFromPdfAsync(fileStream),
-                ".png" or ".jpg" or ".jpeg" => await ImageStreamToOcrAsync(fileStream),
+                "application/msword" or "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    => ReadDocx(fileStream),
+
+                "application/pdf"
+                    => await ExtractTextFromPdfAsync(fileStream),
+
+                "image/jpeg" or "image/png" or "image/tiff" or "image/tif" 
+                    => await ImageStreamToOcrAsync(fileStream),
+
                 _ => throw new NotSupportedException("Formato no soportado.")
             };
         }

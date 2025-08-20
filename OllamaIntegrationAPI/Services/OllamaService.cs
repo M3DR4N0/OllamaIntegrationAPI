@@ -26,9 +26,7 @@ namespace OllamaIntegrationAPI.Services
 
         public async Task<IResponse> ExtractContractInfoAsync(OllamaRequest request)
         {
-            int palabras = request.Prompt.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
-
-            var tokenCount = GptEncoding.GetEncoding("cl100k_base").CountTokens(request.Prompt);
+            var tokenCount = GptEncoding.GetEncoding("cl100k_base").CountTokens(request.Prompt) + 2000;
 
             var payload = new
             {

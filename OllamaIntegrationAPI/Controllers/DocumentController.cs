@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.AspNetCore.Mvc;
 using OllamaIntegrationAPI.Models;
 using OllamaIntegrationAPI.Services;
+using System.Net.Mime;
+using System.Xml.Schema;
 
 namespace OllamaIntegrationAPI.Controllers
 {
@@ -24,10 +26,9 @@ namespace OllamaIntegrationAPI.Controllers
             if (request.File == null || request.File.Length == 0)
                 return BadRequest("El archivo es requerido.");
 
-            string extension = Path.GetExtension(request.File.FileName).ToLowerInvariant();
             using var stream = request.File.OpenReadStream();
 
-            string documentText = await _ocrService.ExtractTextAsync(stream, extension);
+            string documentText = await _ocrService.ExtractTextAsync(stream, request.File.ContentType);
 
             request.Prompt = $"{request.Prompt}\nContenido del documento:\n{documentText}";
             var result = await _ollamaService.ExtractContractInfoAsync(request);
