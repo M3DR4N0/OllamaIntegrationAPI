@@ -33,7 +33,7 @@ namespace OllamaIntegrationAPI.Services
                 request.Stream,
                 Options = new
                 {
-                    num_ctx = 30000
+                    num_ctx = 7000
                 }
             };
 
