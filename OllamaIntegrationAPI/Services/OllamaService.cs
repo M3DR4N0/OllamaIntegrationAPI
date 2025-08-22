@@ -88,7 +88,7 @@ namespace OllamaIntegrationAPI.Services
                 var doc = JsonDocument.Parse(jsonString);
 
                 var rawOutput = doc.RootElement.GetProperty("response").GetString();
-                return ResponseHandler.Success(rawOutput);
+                return ResponseHandler.Success(JsonSerializer.Deserialize<dynamic>(rawOutput!));
             }
         }
 
