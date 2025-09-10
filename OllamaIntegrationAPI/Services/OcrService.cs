@@ -1,5 +1,4 @@
-﻿using Tesseract;
-using UglyToad.PdfPig;
+﻿using UglyToad.PdfPig;
 using ImageMagick;
 using System.Drawing;
 using System.Text;
@@ -9,49 +8,19 @@ namespace OllamaIntegrationAPI.Services
 {
     public interface IOcrService
     {
-        Task<string> ExtractTextAsync(Stream fileStream, string fileExtension);
+        string? ExtractTextFromPdfAsync(Stream pdfStream);
+        string ReadDocx(Stream stream);
+
+        //Task<string> PdfStreamToOcrAllPagesAsync(Stream pdfStream);
+
+        //Task<string> ImageStreamToOcrAsync(Stream imageStream);
+        IEnumerable<string> GetUriImages(Stream imageStream);
+        IEnumerable<string> GetUriImages(List<MemoryStream> imageStreams); 
     }
 
     public class OcrService : IOcrService
     {
-        private readonly string _tessDataPath;
-        private readonly string _defaultLang;
-
-        public OcrService(IWebHostEnvironment env, string tessLang = "spa")
-        {
-            // Ajusta la ruta según cómo quieras distribuir tessdata
-            _tessDataPath = Path.Combine(env.ContentRootPath, "tessdata");
-            _defaultLang = tessLang;
-
-            if (!Directory.Exists(_tessDataPath))
-                throw new DirectoryNotFoundException($"No se encontró la carpeta tessdata en {_tessDataPath}. Coloca los .traineddata ahí.");
-        }
-
-        public async Task<string> ExtractTextAsync(Stream fileStream, string fileExtension)
-        {
-            if (fileStream == null)
-                throw new ArgumentNullException(nameof(fileStream));
-
-            fileStream.Position = 0;
-   
-
-            return fileExtension switch
-            {
-                //".txt" => ReadTxt(fileStream),
-                "application/msword" or "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    => ReadDocx(fileStream),
-
-                "application/pdf"
-                    => await ExtractTextFromPdfAsync(fileStream),
-
-                "image/jpeg" or "image/png" or "image/tiff" or "image/tif" 
-                    => await ImageStreamToOcrAsync(fileStream),
-
-                _ => throw new NotSupportedException("Formato no soportado.")
-            };
-        }
-
-        private async Task<string> ExtractTextFromPdfAsync(Stream pdfStream)
+        public string? ExtractTextFromPdfAsync(Stream pdfStream)
         {
             var sb = new StringBuilder();
 
@@ -70,13 +39,7 @@ namespace OllamaIntegrationAPI.Services
                     }
                     else
                     {
-                        // Página sin texto -> renderizarla como imagen y hacer OCR
-                        // Para esto necesitamos volver a leer el pdf y renderizar la página específica.
-                        // Magick.NET puede leer el stream original sólo si lo posicionamos al inicio y leemos todas las páginas,
-                        // así que vamos a renderizar el PDF completo vía Magick y luego procesar página por página.
-                        // Para simplificar, rompemos y procesamos con Magick.NET todo el PDF:
-                        sb.AppendLine(await PdfStreamToOcrAllPagesAsync(pdfStream));
-                        break; // ya procesamos con Magick, salimos del loop de PdfPig
+                        return null;
                     }
                 }
             }
@@ -84,7 +47,7 @@ namespace OllamaIntegrationAPI.Services
             return sb.ToString();
         }
 
-        private string ReadDocx(Stream stream)
+        public string ReadDocx(Stream stream)
         {
             using var ms = new MemoryStream();
             stream.CopyTo(ms);
@@ -92,68 +55,104 @@ namespace OllamaIntegrationAPI.Services
             return doc.Text;
         }
 
-        private async Task<string> PdfStreamToOcrAllPagesAsync(Stream pdfStream)
+        //public async Task<string> PdfStreamToOcrAllPagesAsync(Stream pdfStream)
+        //{
+        //    pdfStream.Position = 0;
+        //    var sb = new StringBuilder();
+
+        //    // Magick.NET: configurar density para mejor resolución (ej. 150–300 DPI)
+        //    var settings = new MagickReadSettings()
+        //    {
+        //        Density = new Density(200, 200) // sube si quieres mejor OCR, pero más memoria
+        //    };
+
+        //    // MagickImageCollection puede leer desde el stream
+        //    using (var images = new MagickImageCollection())
+        //    {
+        //        pdfStream.Position = 0;
+        //        images.Read(pdfStream, settings);
+
+        //        int pageNum = 0;
+        //        foreach (var img in images)
+        //        {
+        //            pageNum++;
+
+        //            // Convertir MagickImage a Bitmap para Tesseract
+        //            var pageText = DoTesseractOcr(img.ToByteArray());
+        //            sb.AppendLine(pageText ?? "");
+        //        }
+        //    }
+
+        //    return await Task.FromResult(sb.ToString());
+        //}
+
+        //public async Task<string> ImageStreamToOcrAsync(Stream imageStream)
+        //{
+        //    imageStream.Position = 0;
+
+        //    // Leemos la imagen con Magick para normalizarla (por si viene en TIFF multipágina, etc.)
+        //    using (var images = new MagickImageCollection())
+        //    {
+        //        images.Read(imageStream);
+
+        //        // Si hay varias imágenes (multipage TIFF) procesarlas todas concatenadas
+        //        var sb = new StringBuilder();
+        //        foreach (var img in images)
+        //        {             
+        //            //var pageText = DoTesseractOcr(img.ToByteArray());
+        //            sb.AppendLine(pageText ?? "");                  
+        //        }
+
+        //        return await Task.FromResult(sb.ToString());
+        //    }
+        //}
+
+        public IEnumerable<string> GetUriImages(Stream imageStream)
         {
-            pdfStream.Position = 0;
-            var sb = new StringBuilder();
-
-            // Magick.NET: configurar density para mejor resolución (ej. 150–300 DPI)
-            var settings = new MagickReadSettings()
+            using (var collection = new MagickImageCollection(imageStream))
             {
-                Density = new Density(200, 200) // sube si quieres mejor OCR, pero más memoria
-            };
-
-            // MagickImageCollection puede leer desde el stream
-            using (var images = new MagickImageCollection())
-            {
-                pdfStream.Position = 0;
-                images.Read(pdfStream, settings);
-
-                int pageNum = 0;
-                foreach (var img in images)
+                foreach (var frame in collection)
                 {
-                    pageNum++;
+                    // Limpieza básica (opcional)
+                    frame.ColorSpace = ColorSpace.sRGB;
+                    frame.Alpha(AlphaOption.Remove);
 
-                    // Convertir MagickImage a Bitmap para Tesseract
-                    var pageText = DoTesseractOcr(img.ToByteArray());
-                    sb.AppendLine(pageText ?? "");
+                    using var mem = new MemoryStream();
+                    // PNG para texto (o cambia a Jpeg si prefieres)
+                    frame.Format = MagickFormat.Png;
+                    frame.Write(mem);
+
+                    var b64 = Convert.ToBase64String(mem.ToArray());                
+
+                    var dataUri = $"data:image/png;base64,{b64}";
+
+                    yield return dataUri;
                 }
             }
-
-            return await Task.FromResult(sb.ToString());
         }
 
-        private async Task<string> ImageStreamToOcrAsync(Stream imageStream)
+        public IEnumerable<string> GetUriImages(List<MemoryStream> imageStreams)
         {
-            imageStream.Position = 0;
-
-            // Leemos la imagen con Magick para normalizarla (por si viene en TIFF multipágina, etc.)
-            using (var images = new MagickImageCollection())
+            using (var collection = new MagickImageCollection(imageStreams.Select(x => new MagickImage(x))))
             {
-                images.Read(imageStream);
+                foreach (var frame in collection)
+                {
+                    // Limpieza básica (opcional)
+                    frame.ColorSpace = ColorSpace.sRGB;
+                    frame.Alpha(AlphaOption.Remove);
 
-                // Si hay varias imágenes (multipage TIFF) procesarlas todas concatenadas
-                var sb = new StringBuilder();
-                foreach (var img in images)
-                {             
-                    var pageText = DoTesseractOcr(img.ToByteArray());
-                    sb.AppendLine(pageText ?? "");                  
+                    using var mem = new MemoryStream();
+                    // PNG para texto (o cambia a Jpeg si prefieres)
+                    frame.Format = MagickFormat.Png;
+                    frame.Write(mem);
+
+                    var b64 = Convert.ToBase64String(mem.ToArray());
+
+                    var dataUri = $"data:image/png;base64,{b64}";
+
+                    yield return dataUri;
                 }
-
-                return await Task.FromResult(sb.ToString());
             }
-        }
-
-        private string DoTesseractOcr(byte[] bytes)
-        {
-            // Ajustes: podrías convertir a escala de grises, aplicar binarización, etc. si hace falta mejorar OCR.
-            using var engine = new TesseractEngine(_tessDataPath, _defaultLang, EngineMode.Default);      
-
-            // With the following corrected code:
-            using var pix = Pix.LoadFromMemory(bytes);
-            using var page = engine.Process(pix);
-            var text = page.GetText();
-            return text ?? string.Empty;
         }
     }
 }

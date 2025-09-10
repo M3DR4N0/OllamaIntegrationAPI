@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using OllamaIntegrationAPI.Middlewares;
 using OllamaIntegrationAPI.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -48,6 +49,10 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
+
+// do error middleware
+
+app.UseErrorHandlerMiddleware();
 
 app.UseHttpsRedirection();
 

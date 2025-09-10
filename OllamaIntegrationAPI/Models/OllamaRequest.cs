@@ -1,11 +1,20 @@
-﻿namespace OllamaIntegrationAPI.Models
+﻿using System.Text.Json.Serialization;
+
+namespace OllamaIntegrationAPI.Models
 {
     public class OllamaRequest
     {
-        public required IFormFile File { get; set; }
-        public required string Model { get; set; }
+        public IFormFile? File { get; set; }
+
+        public List<IFormFile>? TiffFile { get; set; }
+
+        public string? Model { get; set; }
         public required string Prompt { get; set; }
         public string? Format { get; set; }
         public bool Stream { get; set; } = false;
+
+        [JsonIgnore]
+        public object? Payload { get; set; } 
+
     }
 }

@@ -21,42 +21,23 @@ namespace OllamaIntegrationAPI.Services
         public OllamaService(HttpClient httpClient, IConfiguration config)
         {
             _httpClient = httpClient;
-            _httpClient.BaseAddress = new Uri(config["OLLAMA_HOST"] ?? "http://localhost:11434");
+            _httpClient.BaseAddress = new Uri("http://localhost:11220");
             _httpClient.Timeout = TimeSpan.FromHours(1); // Set a longer timeout for Ollama requests
         }
 
         public async Task<IResponse> ExtractContractInfoAsync(OllamaRequest request)
         {
-            var encoding = GptEncoding.GetEncoding("cl100k_base");
-            var tokens = encoding.Encode(request.Prompt);
+            var content = new StringContent(JsonSerializer.Serialize(request.Payload), Encoding.UTF8, "application/json");
 
-            var tokenCount = tokens.Count + 2000; // Adding a buffer for the response
-
-            var payload = new
-            {
-                model = request.Model,
-                prompt = request.Prompt,
-                stream = request.Stream,
-                options = new
-                {
-                    num_ctx = tokenCount,
-                    temperature = 0,      // extracción factual
-                    top_p = 0.9,
-                    //num_predict = 512     // límite salida
-                },
-                format = request.Format
-            };
-
-            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, "api/generate")
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, "chat/completions")
             {
                 Content = content
             };
 
             using var response = await _httpClient.SendAsync(
                 requestMessage,
-                HttpCompletionOption.ResponseHeadersRead,
+                request.Stream ? HttpCompletionOption.ResponseHeadersRead
+                   : HttpCompletionOption.ResponseContentRead,
                 CancellationToken.None
             );
 
@@ -76,7 +57,7 @@ namespace OllamaIntegrationAPI.Services
                     if (string.IsNullOrWhiteSpace(line)) continue;
 
                     var chunk = JsonDocument.Parse(line);
-                    if (chunk.RootElement.TryGetProperty("response", out var resp))
+                    if (chunk.RootElement.TryGetProperty("content", out var resp))
                         sb.Append(resp.GetString());
                 }
 
@@ -87,61 +68,25 @@ namespace OllamaIntegrationAPI.Services
                 var jsonString = await response.Content.ReadAsStringAsync();
                 var doc = JsonDocument.Parse(jsonString);
 
-                var rawOutput = doc.RootElement.GetProperty("response").GetString();
-                return ResponseHandler.Success(JsonSerializer.Deserialize<dynamic>(rawOutput!));
+                var rawOutput = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+                return ResponseHandler.Success(TryParseJson(rawOutput!));
             }
         }
 
-        //public async Task<IResponse> ExtractContractInfoAsync(OllamaRequest request)
-        //{
-        //    var tokenCount = GptEncoding.GetEncoding("cl100k_base").CountTokens(request.Prompt) + 2000;
+        private static object TryParseJson(string rawOutput)
+        {
+            try
+            {
+                _ = JsonDocument.Parse(rawOutput);
 
-        //    object payload;
+                return JsonSerializer.Deserialize<dynamic>(rawOutput!)!;
+            }
+            catch
+            {
+                return rawOutput;
+            }
 
-        //    if (request.Format is not null)
-        //    {
-        //        payload = new
-        //        {
-        //            request.Model,
-        //            request.Prompt,
-        //            request.Stream,
-        //            Options = new
-        //            {
-        //                num_ctx = tokenCount
-        //            },
-        //            request.Format,
-        //        };
-        //    }
-        //    else
-        //    {
-        //        payload = new
-        //        {
-        //            request.Model,
-        //            request.Prompt,
-        //            request.Stream,
-        //            Options = new
-        //            {
-        //                num_ctx = tokenCount
-        //            },
-        //        };
-        //    }
-
-        //    var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-        //    var response = await _httpClient.PostAsync("api/generate", content);
-        //    response.EnsureSuccessStatusCode();
-
-        //    if (response.StatusCode != System.Net.HttpStatusCode.OK)
-        //    {
-        //        return ResponseHandler.Error($"Ollama API returned status code {response.StatusCode}");
-        //    }
-
-        //    var jsonString = await response.Content.ReadAsStringAsync();
-        //    var ollamaResponse = JsonDocument.Parse(jsonString);
-
-        //    string rawOutput = ollamaResponse.RootElement.GetProperty("response").GetString() ?? "{}";
-
-        //    return ResponseHandler.Success(JsonSerializer.Deserialize<dynamic>(rawOutput));
-        //}
-
+            
+        }
     }
 }

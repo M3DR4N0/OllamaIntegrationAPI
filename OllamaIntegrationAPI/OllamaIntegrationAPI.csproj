@@ -17,7 +17,6 @@
     <PackageReference Include="SharpToken" Version="2.0.3" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
     <PackageReference Include="System.Drawing.Common" Version="9.0.8" />
-    <PackageReference Include="Tesseract" Version="5.2.0" />
     <PackageReference Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
   </ItemGroup>
 

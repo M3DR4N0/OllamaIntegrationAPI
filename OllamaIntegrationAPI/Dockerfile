@@ -23,12 +23,12 @@ FROM build AS publish
 ARG BUILD_CONFIGURATION=Release
 RUN dotnet publish "./OllamaIntegrationAPI.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
 
-# Instalar Tesseract y dependencias OCR
-RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    tesseract-ocr-spa \
-    libtesseract-dev \
-    && rm -rf /var/lib/apt/lists/*
+## Instalar Tesseract y dependencias OCR
+#RUN apt-get update && apt-get install -y \
+    #tesseract-ocr \
+    #tesseract-ocr-spa \
+    #libtesseract-dev \
+    #&& rm -rf /var/lib/apt/lists/*
 
 # This stage is used in production or when running from VS in regular mode (Default when not using the Debug configuration)
 FROM base AS final
