@@ -1,11 +1,7 @@
 ﻿using OllamaIntegrationAPI.Models;
 using OllamaIntegrationAPI.Models.Response;
-using SharpToken;
-using System.Net.Http;
-using System.Reflection;
 using System.Text;
 using System.Text.Json;
-using static System.Net.Mime.MediaTypeNames;
 
 namespace OllamaIntegrationAPI.Services
 {
@@ -21,7 +17,7 @@ namespace OllamaIntegrationAPI.Services
         public OllamaService(HttpClient httpClient, IConfiguration config)
         {
             _httpClient = httpClient;
-            _httpClient.BaseAddress = new Uri("http://localhost:11220");
+            _httpClient.BaseAddress = new Uri(config["LLAMA_HOST"] ?? "http://localhost:11220");
             _httpClient.Timeout = TimeSpan.FromHours(1); // Set a longer timeout for Ollama requests
         }
 
