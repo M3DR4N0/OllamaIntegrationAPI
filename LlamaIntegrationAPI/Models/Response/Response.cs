@@ -1,6 +1,6 @@
 ﻿using System.Net;
 
-namespace OllamaIntegrationAPI.Models.Response
+namespace LlamaIntegrationAPI.Models.Response
 {
     public interface IResponse
     {

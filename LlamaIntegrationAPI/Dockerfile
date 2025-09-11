@@ -12,16 +12,16 @@ EXPOSE 8081
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
-COPY ["OllamaIntegrationAPI/OllamaIntegrationAPI.csproj", "OllamaIntegrationAPI/"]
-RUN dotnet restore "./OllamaIntegrationAPI/OllamaIntegrationAPI.csproj"
+COPY ["LlamaIntegrationAPI/LlamaIntegrationAPI.csproj", "LlamaIntegrationAPI/"]
+RUN dotnet restore "./LlamaIntegrationAPI/LlamaIntegrationAPI.csproj"
 COPY . .
-WORKDIR "/src/OllamaIntegrationAPI"
-RUN dotnet build "./OllamaIntegrationAPI.csproj" -c $BUILD_CONFIGURATION -o /app/build
+WORKDIR "/src/LlamaIntegrationAPI"
+RUN dotnet build "./LlamaIntegrationAPI.csproj" -c $BUILD_CONFIGURATION -o /app/build
 
 # This stage is used to publish the service project to be copied to the final stage
 FROM build AS publish
 ARG BUILD_CONFIGURATION=Release
-RUN dotnet publish "./OllamaIntegrationAPI.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+RUN dotnet publish "./LlamaIntegrationAPI.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
 
 ## Instalar Tesseract y dependencias OCR
 #RUN apt-get update && apt-get install -y \
@@ -34,4 +34,4 @@ RUN dotnet publish "./OllamaIntegrationAPI.csproj" -c $BUILD_CONFIGURATION -o /a
 FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
-ENTRYPOINT ["dotnet", "OllamaIntegrationAPI.dll"]
+ENTRYPOINT ["dotnet", "LlamaIntegrationAPI.dll"]

@@ -1,31 +1,31 @@
-﻿using OllamaIntegrationAPI.Models;
-using OllamaIntegrationAPI.Models.Response;
+﻿using LlamaIntegrationAPI.Models;
+using LlamaIntegrationAPI.Models.Response;
 using System.Text;
 using System.Text.Json;
 
-namespace OllamaIntegrationAPI.Services
+namespace LlamaIntegrationAPI.Services
 {
-    public interface IOllamaService
+    public interface ILlamaService
     {
-        Task<IResponse> ExtractContractInfoAsync(OllamaRequest request);
+        Task<IResponse> ExtractContractInfoAsync(LlamaRequest request);
     }
 
-    public class OllamaService : IOllamaService
+    public class LlamaService : ILlamaService
     {
         private readonly HttpClient _httpClient;
 
-        public OllamaService(HttpClient httpClient, IConfiguration config)
+        public LlamaService(HttpClient httpClient, IConfiguration config)
         {
             _httpClient = httpClient;
             _httpClient.BaseAddress = new Uri(config["LLAMA_HOST"] ?? "http://localhost:11220");
-            _httpClient.Timeout = TimeSpan.FromHours(1); // Set a longer timeout for Ollama requests
+            _httpClient.Timeout = TimeSpan.FromHours(1); // Set a longer timeout for Llama requests
         }
 
-        public async Task<IResponse> ExtractContractInfoAsync(OllamaRequest request)
+        public async Task<IResponse> ExtractContractInfoAsync(LlamaRequest request)
         {
             var content = new StringContent(JsonSerializer.Serialize(request.Payload), Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, "chat/completions")
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, "v1/chat/completions")
             {
                 Content = content
             };
@@ -38,7 +38,7 @@ namespace OllamaIntegrationAPI.Services
             );
 
             if (!response.IsSuccessStatusCode)
-                return ResponseHandler.Error($"Ollama API returned status code {response.StatusCode}");
+                return ResponseHandler.Error($"Llama API returned status code {response.StatusCode}");
 
             if (request.Stream)
             {

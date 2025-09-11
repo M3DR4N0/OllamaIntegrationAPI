@@ -1,7 +1,7 @@
 ﻿using ImageMagick.Drawing;
 using SharpToken;
 
-namespace OllamaIntegrationAPI.Helpers
+namespace LlamaIntegrationAPI.Helpers
 {
     public static class TextChunker
     {

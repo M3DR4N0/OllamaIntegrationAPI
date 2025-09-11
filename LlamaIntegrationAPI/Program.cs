@@ -1,6 +1,8 @@
+using LlamaIntegrationAPI.Middlewares;
+using LlamaIntegrationAPI.Services;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
-using OllamaIntegrationAPI.Middlewares;
+using OllamaIntegrationAPI.Helpers;
 using OllamaIntegrationAPI.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -38,8 +40,10 @@ builder.Services.Configure<KestrelServerOptions>(options =>
 
 });
 
-builder.Services.AddScoped<IOcrService, OcrService>();
-builder.Services.AddHttpClient<IOllamaService, OllamaService>();
+builder.Services.AddScoped<IDocumentProcessor, DocumentProcessor>();
+builder.Services.AddScoped<IPayloadBuilder, PayloadBuilder>();
+builder.Services.AddHttpClient<ILlamaService, LlamaService>();
+
 builder.Services.AddCors(o => o.AddPolicy("AllowAll", b => b.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
 var app = builder.Build();

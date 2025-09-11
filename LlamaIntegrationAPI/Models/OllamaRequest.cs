@@ -1,8 +1,8 @@
 ﻿using System.Text.Json.Serialization;
 
-namespace OllamaIntegrationAPI.Models
+namespace LlamaIntegrationAPI.Models
 {
-    public class OllamaRequest
+    public class LlamaRequest
     {
         public IFormFile? File { get; set; }
 

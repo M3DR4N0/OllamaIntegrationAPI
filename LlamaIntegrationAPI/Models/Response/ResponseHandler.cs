@@ -1,7 +1,7 @@
 ﻿using System.Net;
-using static OllamaIntegrationAPI.Models.Response.Response;
+using static LlamaIntegrationAPI.Models.Response.Response;
 
-namespace OllamaIntegrationAPI.Models.Response
+namespace LlamaIntegrationAPI.Models.Response
 {
     public class ResponseHandler
     {

@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
-namespace OllamaIntegrationAPI.Controllers
+namespace LlamaIntegrationAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]

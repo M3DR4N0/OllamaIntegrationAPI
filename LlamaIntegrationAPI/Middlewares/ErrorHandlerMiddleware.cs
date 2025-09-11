@@ -1,7 +1,7 @@
-﻿using OllamaIntegrationAPI.Models.Response;
+﻿using LlamaIntegrationAPI.Models.Response;
 using System.Text.Json;
 
-namespace OllamaIntegrationAPI.Middlewares
+namespace LlamaIntegrationAPI.Middlewares
 {
     public class ErrorHandlerMiddleware(RequestDelegate next, ILogger<ErrorHandlerMiddleware> logger) 
     {
