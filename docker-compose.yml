@@ -9,6 +9,9 @@ services:
       - "5000:8080"
     depends_on:
       - llamacpp
+    volumes:
+      # monta tu carpeta local tessdata dentro del contenedor
+      - ./LlamaIntegrationAPI/tessdata:/app/tessdata:ro
     environment:
       - ASPNETCORE_URLS=http://+:8080
       - LLAMA_HOST=http://llamacpp:11220

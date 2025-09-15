@@ -1,6 +1,8 @@
 ﻿using ImageMagick;
 using LlamaIntegrationAPI.Models;
+using System;
 using System.Text;
+using Tesseract;
 using UglyToad.PdfPig;
 using Xceed.Words.NET;
 
@@ -8,15 +10,14 @@ namespace OllamaIntegrationAPI.Services
 {
     public interface IDocumentProcessor
     {
-        Task<(string? text, IEnumerable<string>? images_url)> ProcessAsync(LlamaRequest request);   
+        Task<string> ProcessAsync(LlamaRequest request);   
     }
 
     public class DocumentProcessor(ILogger<DocumentProcessor> logger) : IDocumentProcessor 
     {
-        public async Task<(string? text, IEnumerable<string>? images_url)> ProcessAsync(LlamaRequest request) 
+        public async Task<string> ProcessAsync(LlamaRequest request) 
         {
-            string? documentText = null;
-            IEnumerable<string>? uriImages = null;
+            string documentText;
 
             // Usa stream principal si hay file
             Stream? stream = request.File?.OpenReadStream();
@@ -41,63 +42,160 @@ namespace OllamaIntegrationAPI.Services
             {
                 case "application/msword":
                 case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                    documentText = ReadDocx(stream!);
+                    documentText = ExtractTextFromWordWithOcr(stream!);
                     break;
 
                 case "application/pdf":
                     documentText = ExtractTextFromPdfAsync(stream!);
-                    if (string.IsNullOrWhiteSpace(documentText))
-                        uriImages = GetUriImages(stream!); 
                     break;
 
                 case "image/jpeg":
                 case "image/png":
                 case "image/tiff":
                 case "image/tif":
-                    uriImages = GetUriImages(msList);
+                    if (stream is null)
+                    {
+                        documentText = ExtractTextFromImageAsync(msList);
+                        break;
+                    }
+
+                    documentText = ExtractTextFromImageAsync(stream);
+                 
                     break;
 
                 default:
                     throw new NotSupportedException($"Formato no soportado: {contentType}");
             }
 
-            return (documentText, uriImages);
+            return documentText;
 
         }
 
-        private static string? ExtractTextFromPdfAsync(Stream pdfStream)
+        private static string ExtractTextFromPdfAsync(Stream pdfStream)
         {
             var sb = new StringBuilder();
 
-            // Primero intentar extraer texto con PdfPig (si el PDF tiene texto seleccionado)
-            pdfStream.Position = 0;
             using (var pdf = PdfDocument.Open(pdfStream))
             {
-                int pageIndex = 0;
                 foreach (var page in pdf.GetPages())
                 {
-                    pageIndex++;
-                    var pageText = page.Text;
-                    if (!string.IsNullOrWhiteSpace(pageText))
+                    var words = page.GetWords().OrderBy(w => w.BoundingBox.Bottom).ToList(); 
+
+                    double currentLineY = double.MinValue;
+
+                    foreach (var word in words)
                     {
-                        sb.AppendLine(pageText);
+
+                        if (Math.Abs(word.BoundingBox.Bottom - currentLineY) > 5)
+                        {                         
+                            if (sb.Length > 0)
+                            {
+                                sb.AppendLine();
+                                currentLineY = word.BoundingBox.Bottom;
+                            }
+                            currentLineY = word.BoundingBox.Bottom;
+                        }
+                        else
+                        {
+                            sb.Append(" ");
+                        }
+
+                        sb.Append(word.Text);
                     }
-                    else
+
+                    sb.AppendLine();
+
+                    if (words.Count == 0)
                     {
-                        return null;
+                        foreach (var image in page.GetImages())
+                        {
+                            using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
+                            using var pix = Pix.LoadFromMemory([.. image.RawBytes]);
+                            using var result = engine.Process(pix);
+                            sb.AppendLine(result.GetText());
+                            sb.AppendLine();
+                        }
                     }
+                       
                 }
             }
 
             return sb.ToString();
         }
 
-        private static string ReadDocx(Stream stream)
+        public static string ExtractTextFromWordWithOcr(Stream stream)
         {
-            using var ms = new MemoryStream();
-            stream.CopyTo(ms);
-            using var doc = DocX.Load(ms);
-            return doc.Text;
+            var sb = new StringBuilder();
+
+            using (var doc = DocX.Load(stream))
+            {
+                // Texto directo
+                foreach (var para in doc.Paragraphs)
+                {
+                    if (!string.IsNullOrWhiteSpace(para.Text))
+                        sb.AppendLine(para.Text);
+                }
+
+                // OCR en imágenes
+                foreach (var pic in doc.Pictures)
+                {
+                    using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
+
+                    using var ms = new MemoryStream();
+                    
+                    pic.Stream.CopyTo(ms);
+                    ms.Position = 0;
+
+                    using var img = Pix.LoadFromMemory(ms.ToArray());
+                    using var page = engine.Process(img);
+                    var text = page.GetText();
+
+                    sb.AppendLine(text);
+                    sb.AppendLine();
+                }
+            }
+
+            return sb.ToString();
+        }
+
+        private static string ExtractTextFromImageAsync(Stream imageStream)
+        {
+            StringBuilder sb = new();
+
+            using var collection = new MagickImageCollection(imageStream);
+
+            using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
+
+            foreach (var frame in collection)
+            {
+                using var img = Pix.LoadFromMemory(frame.ToByteArray());
+                using var page = engine.Process(img);
+                var text = page.GetText();
+
+                sb.AppendLine(text);
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+
+        private static string ExtractTextFromImageAsync(List<MemoryStream> imageStreams)
+        {
+            StringBuilder sb = new();
+
+            using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
+            foreach (var imgStream in imageStreams)
+            {
+                imgStream.Position = 0;
+                using var img = Pix.LoadFromMemory(imgStream.ToArray());
+                using var page = engine.Process(img);
+                var text = page.GetText();
+
+                sb.AppendLine(text);
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
         }
 
         private static IEnumerable<string> GetUriImages(Stream imageStream)
@@ -122,6 +220,8 @@ namespace OllamaIntegrationAPI.Services
                 yield return dataUri;
             }
         }
+
+       
 
         private static IEnumerable<string> GetUriImages(List<MemoryStream> imageStreams)
         {

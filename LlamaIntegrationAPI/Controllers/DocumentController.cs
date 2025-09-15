@@ -29,18 +29,16 @@ namespace LlamaIntegrationAPI.Controllers
             if (!LlamaRequestValidation.IsValid(request, out var errorMessage))
                 return BadRequest(ResponseHandler.Error(errorMessage));
 
-            var (text, images) = await _documentProcessor.ProcessAsync(request);
+            var text = await _documentProcessor.ProcessAsync(request).ConfigureAwait(false);
 
-            if (text == null && images == null)
+            if (string.IsNullOrEmpty(text))
                 return  StatusCode(500, ResponseHandler.Error("No se pudo extraer contenido"));
 
-            var payload = images is not null
-                ? _payloadBuilder.Build(request.Prompt, images!)
-                : _payloadBuilder.Build(request.Prompt, text!);
+            var payload = _payloadBuilder.Build(request.Prompt, text!);
 
             request.Payload = payload;
 
-            var result = await _llamaService.ExtractContractInfoAsync(request);
+            var result = await _llamaService.ExtractContractInfoAsync(request).ConfigureAwait(false);
 
             return StatusCode((int)result.StatusCode, result);
         }
