@@ -53,8 +53,9 @@
                 {
                     new { role = "system", content = DefaultSystemPrompt },
                     new { role = "user",   content = $"{userPrompt}\n\nContenido del documento:\n{documentText}" }
-                }
-            };
+                },
+                response_format = new { type = "json_object"}
+        };
         }
 
         public object Build(string userPrompt, IEnumerable<string> imageUrls)
@@ -65,7 +66,8 @@
                 {
                     new { role = "system", content = DefaultSystemPrompt },
                     new { role = "user",   content = BuildImageContent(userPrompt, imageUrls) }
-                }
+                },
+                response_format = new { type = "json_object" }
             };
         }
 
