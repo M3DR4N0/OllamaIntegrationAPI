@@ -5,6 +5,8 @@ using LlamaIntegrationAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using OllamaIntegrationAPI.Helpers;
 using OllamaIntegrationAPI.Services;
+using OllamaSharp.Models;
+using SharpToken;
 
 namespace LlamaIntegrationAPI.Controllers
 {
@@ -12,19 +14,19 @@ namespace LlamaIntegrationAPI.Controllers
     [Route("api/[controller]")]
     public class DocumentController : ControllerBase
     {
-        private readonly ILlamaService _llamaService;
+        private readonly IOllamaService _llamaService;
         private readonly IDocumentProcessor _documentProcessor;
-        private readonly IPayloadBuilder _payloadBuilder;
+        //private readonly IPayloadBuilder _payloadBuilder;
 
-        public DocumentController(ILlamaService LlamaService, IDocumentProcessor documentProcessor, IPayloadBuilder payloadBuilder)
+        public DocumentController(IOllamaService LlamaService, IDocumentProcessor documentProcessor)
         {
             _llamaService = LlamaService;
             _documentProcessor = documentProcessor;
-            _payloadBuilder = payloadBuilder;
+            //_payloadBuilder = payloadBuilder;
         }
 
         [HttpPost("extract-file")]
-        public async Task<IActionResult> ExtractFromFile([FromForm] LlamaRequest request)
+        public async Task<IActionResult> ExtractFromFile([FromForm] ExtractFromFileRequest request)
         {
             if (!LlamaRequestValidation.IsValid(request, out var errorMessage))
                 return BadRequest(ResponseHandler.Error(errorMessage));
@@ -34,11 +36,19 @@ namespace LlamaIntegrationAPI.Controllers
             if (string.IsNullOrEmpty(text))
                 return  StatusCode(500, ResponseHandler.Error("No se pudo extraer contenido"));
 
-            var payload = _payloadBuilder.Build(request.Prompt, text!);
+            request.Prompt = $"{request.Prompt}\n\nContenido del documento:\n{text}";
 
-            request.Payload = payload;
+            var promptCtxCount = GptEncoding.GetEncoding("cl100k_base").CountTokens(request.Prompt); 
+               
+            request.Stream = false;
 
-            var result = await _llamaService.ExtractContractInfoAsync(request).ConfigureAwait(false);
+            request.Options = new RequestOptions
+            {
+                Temperature = 0,
+                NumCtx = promptCtxCount + 2000
+            };
+
+            var result = await _llamaService.ExtractInfoAsync(request).ConfigureAwait(false);
 
             return StatusCode((int)result.StatusCode, result);
         }

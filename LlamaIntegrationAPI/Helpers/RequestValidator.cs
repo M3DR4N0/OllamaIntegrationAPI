@@ -6,7 +6,7 @@ namespace LlamaIntegrationAPI.Helpers
 {
     public class LlamaRequestValidation
     {
-        public static bool IsValid(LlamaRequest request, out string errorMessage)
+        public static bool IsValid(ExtractFromFileRequest request, out string errorMessage)
         {
             foreach (var rule in RequestValidators.Rules)
             {
@@ -22,7 +22,7 @@ namespace LlamaIntegrationAPI.Helpers
 
     }
 
-    public record ValidationRule(Predicate<LlamaRequest> Check, string ErrorMessage);
+    public record ValidationRule(Predicate<ExtractFromFileRequest> Check, string ErrorMessage);
 
     public static class RequestValidators
     {

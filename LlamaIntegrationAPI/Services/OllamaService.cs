@@ -1,31 +1,36 @@
 ﻿using LlamaIntegrationAPI.Models;
 using LlamaIntegrationAPI.Models.Response;
+using OllamaSharp;
+using OllamaSharp.Models;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 
 namespace LlamaIntegrationAPI.Services
 {
-    public interface ILlamaService
+    public interface IOllamaService
     {
-        Task<IResponse> ExtractContractInfoAsync(LlamaRequest request);
+        Task<IResponse> ExtractInfoAsync(GenerateRequest request);
     }
 
-    public class LlamaService : ILlamaService
+    public class OllamaService : IOllamaService
     {
         private readonly HttpClient _httpClient;
 
-        public LlamaService(HttpClient httpClient, IConfiguration config)
+        public OllamaService(HttpClient httpClient, IConfiguration config)
         {
+            var host = config["OLLAMA_HOST"] ?? "http://localhost:11434";
+
             _httpClient = httpClient;
-            _httpClient.BaseAddress = new Uri(config["LLAMA_HOST"] ?? "http://localhost:11220");
+            _httpClient.BaseAddress = new Uri(host);
             _httpClient.Timeout = TimeSpan.FromHours(1); // Set a longer timeout for Llama requests
         }
 
-        public async Task<IResponse> ExtractContractInfoAsync(LlamaRequest request)
+        public async Task<IResponse> ExtractInfoAsync(GenerateRequest request)
         {
-            var content = new StringContent(JsonSerializer.Serialize(request.Payload), Encoding.UTF8, "application/json");
+            var content = new StringContent(JsonSerializer.Serialize(request), Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, "v1/chat/completions")
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, "api/generate")
             {
                 Content = content
             };
@@ -40,49 +45,41 @@ namespace LlamaIntegrationAPI.Services
             if (!response.IsSuccessStatusCode)
                 return ResponseHandler.Error($"Llama API returned status code {response.StatusCode}");
 
-            if (request.Stream)
+            var responseStream = await response.Content.ReadFromJsonAsync<GenerateResponseStream>();
+           
+            var rawOutput = responseStream.Response;
+            return ResponseHandler.Success(TryParseJson(rawOutput!));
+            
+        }
+
+        private static JsonElement ParseClean(string llmResponse)
+        {
+            // quita fences si vienen
+            if (llmResponse.StartsWith("```"))
             {
-                await using var stream = await response.Content.ReadAsStreamAsync();
-                using var reader = new StreamReader(stream);
-
-                var sb = new StringBuilder();
-
-                while (!reader.EndOfStream)
-                {
-                    var line = await reader.ReadLineAsync();
-                    if (string.IsNullOrWhiteSpace(line)) continue;
-
-                    var chunk = JsonDocument.Parse(line);
-                    if (chunk.RootElement.TryGetProperty("content", out var resp))
-                        sb.Append(resp.GetString());
-                }
-
-                return ResponseHandler.Success(sb.ToString());
+                var firstNL = llmResponse.IndexOf('\n');
+                if (firstNL >= 0) llmResponse = llmResponse[(firstNL + 1)..];
+                var lastFence = llmResponse.LastIndexOf("```", StringComparison.Ordinal);
+                if (lastFence >= 0) llmResponse = llmResponse[..lastFence];
             }
-            else
-            {
-                var jsonString = await response.Content.ReadAsStringAsync();
-                var doc = JsonDocument.Parse(jsonString);
 
-                var rawOutput = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
-                return ResponseHandler.Success(TryParseJson(rawOutput!));
-            }
+            // recorta del primer '{' al último '}'
+            int i = llmResponse.IndexOf('{'), j = llmResponse.LastIndexOf('}');
+            var json = (i >= 0 && j > i) ? llmResponse.Substring(i, j - i + 1).Trim() : "{}";
+
+            return JsonDocument.Parse(json).RootElement;
         }
 
         private static object TryParseJson(string rawOutput)
         {
             try
             {
-                _ = JsonDocument.Parse(rawOutput);
-
-                return JsonSerializer.Deserialize<dynamic>(rawOutput!)!;
+                return ParseClean(rawOutput);
             }
             catch
             {
                 return rawOutput;
             }
-
-            
         }
     }
 }

@@ -10,12 +10,12 @@ namespace OllamaIntegrationAPI.Services
 {
     public interface IDocumentProcessor
     {
-        Task<string> ProcessAsync(LlamaRequest request);   
+        Task<string> ProcessAsync(ExtractFromFileRequest request);   
     }
 
     public class DocumentProcessor(ILogger<DocumentProcessor> logger) : IDocumentProcessor 
     {
-        public async Task<string> ProcessAsync(LlamaRequest request) 
+        public async Task<string> ProcessAsync(ExtractFromFileRequest request) 
         {
             string documentText;
 
