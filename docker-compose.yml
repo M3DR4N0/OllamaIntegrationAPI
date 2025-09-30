@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: LlamaIntegrationAPI/Dockerfile
+      network: host
     ports:
       - "5000:8080"
     depends_on:
