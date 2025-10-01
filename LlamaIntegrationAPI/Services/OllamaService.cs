@@ -1,5 +1,6 @@
 ﻿using LlamaIntegrationAPI.Models;
 using LlamaIntegrationAPI.Models.Response;
+using Microsoft.Extensions.Logging;
 using OllamaSharp;
 using OllamaSharp.Models;
 using System.Net.Http;
@@ -16,12 +17,14 @@ namespace LlamaIntegrationAPI.Services
     public class OllamaService : IOllamaService
     {
         private readonly HttpClient _httpClient;
+        private readonly ILogger<OllamaService> _logger;
 
-        public OllamaService(HttpClient httpClient, IConfiguration config)
+        public OllamaService(HttpClient httpClient, IConfiguration config, ILogger<OllamaService> logger)
         {
             var host = config["OLLAMA_HOST"] ?? "http://localhost:11434";
 
             _httpClient = httpClient;
+            _logger = logger;
             _httpClient.BaseAddress = new Uri(host);
             _httpClient.Timeout = TimeSpan.FromHours(1); // Set a longer timeout for Llama requests
         }
@@ -46,7 +49,28 @@ namespace LlamaIntegrationAPI.Services
                 return ResponseHandler.Error($"Llama API returned status code {response.StatusCode}");
 
             var responseStream = await response.Content.ReadFromJsonAsync<GenerateResponseStream>();
-           
+
+            _logger.LogInformation("Llama response received");
+            _logger.LogInformation(".");
+            _logger.LogInformation(".");
+            _logger.LogInformation(".");
+            _logger.LogInformation(".");
+            _logger.LogInformation(".");
+            _logger.LogInformation(".");
+
+            _logger.LogInformation(responseStream.Response);
+
+
+            _logger.LogInformation(".");
+            _logger.LogInformation(".");
+            _logger.LogInformation(".");
+            _logger.LogInformation(".");
+            _logger.LogInformation(".");
+            _logger.LogInformation(".");
+            _logger.LogInformation(".");
+
+
+
             var rawOutput = responseStream.Response;
             return ResponseHandler.Success(TryParseJson(rawOutput!));
             
