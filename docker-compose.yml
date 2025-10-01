@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   llamaintegrationapi:
     build:
@@ -13,6 +11,7 @@ services:
     volumes:
       # monta tu carpeta local tessdata dentro del contenedor
       - ./LlamaIntegrationAPI/tessdata:/app/tessdata:ro
+    restart: unless-stopped
     environment:
       - ASPNETCORE_URLS=http://+:8080
       - OLLAMA_HOST=http://ollama:11434

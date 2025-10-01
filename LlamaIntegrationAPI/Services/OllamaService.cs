@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using OllamaSharp;
 using OllamaSharp.Models;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -50,30 +51,14 @@ namespace LlamaIntegrationAPI.Services
 
             var responseStream = await response.Content.ReadFromJsonAsync<GenerateResponseStream>();
 
-            _logger.LogInformation("Llama response received");
-            _logger.LogInformation(".");
-            _logger.LogInformation(".");
-            _logger.LogInformation(".");
-            _logger.LogInformation(".");
-            _logger.LogInformation(".");
-            _logger.LogInformation(".");
-
-            _logger.LogInformation(responseStream.Response);
-
-
-            _logger.LogInformation(".");
-            _logger.LogInformation(".");
-            _logger.LogInformation(".");
-            _logger.LogInformation(".");
-            _logger.LogInformation(".");
-            _logger.LogInformation(".");
-            _logger.LogInformation(".");
-
-
-
             var rawOutput = responseStream.Response;
-            return ResponseHandler.Success(TryParseJson(rawOutput!));
-            
+
+            if(request.Format is null || string.IsNullOrEmpty(request.Format?.ToString())) 
+            {
+                return ResponseHandler.Success(rawOutput!);
+            }
+
+            return ResponseHandler.Success(TryParseJson(rawOutput!));          
         }
 
         private static JsonElement ParseClean(string llmResponse)
