@@ -1,10 +1,9 @@
-﻿using LlamaIntegrationAPI.Models;
+﻿using LlamaIntegrationAPI.Helpers;
+using LlamaIntegrationAPI.Models;
 using LlamaIntegrationAPI.Models.Response;
 using Microsoft.Extensions.Logging;
 using OllamaSharp;
 using OllamaSharp.Models;
-using System.Net.Http;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -27,7 +26,7 @@ namespace LlamaIntegrationAPI.Services
             _httpClient = httpClient;
             _logger = logger;
             _httpClient.BaseAddress = new Uri(host);
-            _httpClient.Timeout = TimeSpan.FromHours(1); // Set a longer timeout for Llama requests
+            _httpClient.Timeout = TimeSpan.FromHours(1);
         }
 
         public async Task<IResponse> ExtractInfoAsync(GenerateRequest request)
@@ -51,44 +50,22 @@ namespace LlamaIntegrationAPI.Services
 
             var responseStream = await response.Content.ReadFromJsonAsync<GenerateResponseStream>();
 
+            if (responseStream?.Response is null)
+                return ResponseHandler.Error("Ollama returned an empty response.");
+
             var rawOutput = responseStream.Response;
 
-            if(request.Format is null || string.IsNullOrEmpty(request.Format?.ToString())) 
-            {
-                return ResponseHandler.Success(rawOutput!);
-            }
+            // If no JSON format was requested, return raw text
+            if (request.Format is null || string.IsNullOrEmpty(request.Format?.ToString()))
+                return ResponseHandler.Success(rawOutput);
 
-            return ResponseHandler.Success(TryParseJson(rawOutput!));          
-        }
+            // Multi-strategy JSON extraction
+            var parsed = JsonSanitizer.TryExtractJson(rawOutput);
+            if (parsed.HasValue)
+                return ResponseHandler.Success(parsed.Value);
 
-        private static JsonElement ParseClean(string llmResponse)
-        {
-            // quita fences si vienen
-            if (llmResponse.StartsWith("```"))
-            {
-                var firstNL = llmResponse.IndexOf('\n');
-                if (firstNL >= 0) llmResponse = llmResponse[(firstNL + 1)..];
-                var lastFence = llmResponse.LastIndexOf("```", StringComparison.Ordinal);
-                if (lastFence >= 0) llmResponse = llmResponse[..lastFence];
-            }
-
-            // recorta del primer '{' al último '}'
-            int i = llmResponse.IndexOf('{'), j = llmResponse.LastIndexOf('}');
-            var json = (i >= 0 && j > i) ? llmResponse.Substring(i, j - i + 1).Trim() : "{}";
-
-            return JsonDocument.Parse(json).RootElement;
-        }
-
-        private static object TryParseJson(string rawOutput)
-        {
-            try
-            {
-                return ParseClean(rawOutput);
-            }
-            catch
-            {
-                return rawOutput;
-            }
+            _logger.LogWarning("Failed to extract valid JSON from LLM response. Raw: {Raw}", rawOutput[..Math.Min(rawOutput.Length, 500)]);
+            return ResponseHandler.Success(rawOutput);
         }
     }
 }

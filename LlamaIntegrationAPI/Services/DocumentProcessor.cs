@@ -20,84 +20,92 @@ namespace OllamaIntegrationAPI.Services
             string documentText;
 
             // Usa stream principal si hay file
-            Stream? stream = request.File?.OpenReadStream();
+            await using var stream = request.File?.OpenReadStream();
 
             // Si hay TIFFs, conviértelos a MemoryStream
             var msList = new List<MemoryStream>();
-            if (request.TiffFile != null)
+            try
             {
-                foreach (var file in request.TiffFile)
+                if (request.TiffFile != null)
                 {
-                    var ms = new MemoryStream();
-                    await file.CopyToAsync(ms);
-                    ms.Position = 0;
-                    msList.Add(ms);
+                    foreach (var file in request.TiffFile)
+                    {
+                        var ms = new MemoryStream();
+                        await file.CopyToAsync(ms);
+                        ms.Position = 0;
+                        msList.Add(ms);
+                    }
+                }
+
+                var contentType = request.File?.ContentType ?? request.TiffFile?.FirstOrDefault()?.ContentType;
+                logger.LogInformation("Procesando documento con ContentType: {ContentType}", contentType);
+
+                switch (contentType)
+                {
+                    case "application/msword":
+                    case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                        documentText = ExtractTextFromWord(stream!);
+                        break;
+
+                    case "application/pdf":
+                        documentText = ExtractTextFromPdf(stream!);
+                        break;
+
+                    case "image/jpeg":
+                    case "image/png":
+                    case "image/tiff":
+                    case "image/tif":
+                        if (stream is null)
+                        {
+                            documentText = ExtractTextFromImage(msList);
+                            break;
+                        }
+
+                        documentText = ExtractTextFromImage(stream);
+
+                        break;
+
+                    default:
+                        throw new NotSupportedException($"Formato no soportado: {contentType}");
                 }
             }
-
-            var contentType = request.File?.ContentType ?? request.TiffFile?.FirstOrDefault()?.ContentType;
-            logger.LogInformation("Procesando documento con ContentType: {ContentType}", contentType);
-
-            switch (contentType)
+            finally
             {
-                case "application/msword":
-                case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                    documentText = ExtractTextFromWordWithOcr(stream!);
-                    break;
-
-                case "application/pdf":
-                    documentText = ExtractTextFromPdfAsync(stream!);
-                    break;
-
-                case "image/jpeg":
-                case "image/png":
-                case "image/tiff":
-                case "image/tif":
-                    if (stream is null)
-                    {
-                        documentText = ExtractTextFromImageAsync(msList);
-                        break;
-                    }
-
-                    documentText = ExtractTextFromImageAsync(stream);
-                 
-                    break;
-
-                default:
-                    throw new NotSupportedException($"Formato no soportado: {contentType}");
+                foreach (var ms in msList)
+                    ms.Dispose();
             }
 
             return documentText;
 
         }
 
-        private static string ExtractTextFromPdfAsync(Stream pdfStream)
+        internal static string ExtractTextFromPdf(Stream pdfStream)
         {
             var sb = new StringBuilder();
+            TesseractEngine? engine = null;
 
-            using (var pdf = PdfDocument.Open(pdfStream))
+            try
             {
+                using var pdf = PdfDocument.Open(pdfStream);
+
                 foreach (var page in pdf.GetPages())
                 {
-                    var words = page.GetWords().OrderBy(w => w.BoundingBox.Bottom).ToList(); 
+                    var words = page.GetWords().OrderBy(w => w.BoundingBox.Bottom).ToList();
 
                     double currentLineY = double.MinValue;
 
                     foreach (var word in words)
                     {
-
                         if (Math.Abs(word.BoundingBox.Bottom - currentLineY) > 5)
-                        {                         
+                        {
                             if (sb.Length > 0)
-                            {
                                 sb.AppendLine();
-                                currentLineY = word.BoundingBox.Bottom;
-                            }
+
                             currentLineY = word.BoundingBox.Bottom;
                         }
                         else
                         {
-                            sb.Append(" ");
+                            sb.Append(' ');
                         }
 
                         sb.Append(word.Text);
@@ -107,91 +115,90 @@ namespace OllamaIntegrationAPI.Services
 
                     if (words.Count == 0)
                     {
+                        // Lazy-create a single engine for all OCR pages
+                        engine ??= new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
+
                         foreach (var image in page.GetImages())
                         {
-                            using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
                             using var pix = Pix.LoadFromMemory([.. image.RawBytes]);
                             using var result = engine.Process(pix);
                             sb.AppendLine(result.GetText());
                             sb.AppendLine();
                         }
                     }
-                       
                 }
+            }
+            finally
+            {
+                engine?.Dispose();
             }
 
             return sb.ToString();
         }
 
-        public static string ExtractTextFromWordWithOcr(Stream stream)
+        internal static string ExtractTextFromWord(Stream stream)
         {
             var sb = new StringBuilder();
 
-            using (var doc = DocX.Load(stream))
+            using var doc = DocX.Load(stream);
+
+            foreach (var para in doc.Paragraphs)
             {
-                // Texto directo
-                foreach (var para in doc.Paragraphs)
-                {
-                    if (!string.IsNullOrWhiteSpace(para.Text))
-                        sb.AppendLine(para.Text);
-                }
-
-                // OCR en imágenes
-                foreach (var pic in doc.Pictures)
-                {
-                    using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
-
-                    using var ms = new MemoryStream();
-                    
-                    pic.Stream.CopyTo(ms);
-                    ms.Position = 0;
-
-                    using var img = Pix.LoadFromMemory(ms.ToArray());
-                    using var page = engine.Process(img);
-                    var text = page.GetText();
-
-                    sb.AppendLine(text);
-                    sb.AppendLine();
-                }
+                if (!string.IsNullOrWhiteSpace(para.Text))
+                    sb.AppendLine(para.Text);
             }
 
-            return sb.ToString();
-        }
+            if (doc.Pictures.Count == 0)
+                return sb.ToString();
 
-        private static string ExtractTextFromImageAsync(Stream imageStream)
-        {
-            StringBuilder sb = new();
-
-            using var collection = new MagickImageCollection(imageStream);
-
+            // Single engine for all pictures
             using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
 
-            foreach (var frame in collection)
+            foreach (var pic in doc.Pictures)
             {
-                using var img = Pix.LoadFromMemory(frame.ToByteArray());
-                using var page = engine.Process(img);
-                var text = page.GetText();
+                using var ms = new MemoryStream();
+                pic.Stream.CopyTo(ms);
+                ms.Position = 0;
 
-                sb.AppendLine(text);
+                using var img = Pix.LoadFromMemory(ms.ToArray());
+                using var page = engine.Process(img);
+                sb.AppendLine(page.GetText());
                 sb.AppendLine();
             }
 
             return sb.ToString();
         }
 
-        private static string ExtractTextFromImageAsync(List<MemoryStream> imageStreams)
+        internal static string ExtractTextFromImage(Stream imageStream)
+        {
+            StringBuilder sb = new();
+
+            using var collection = new MagickImageCollection(imageStream);
+            using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
+
+            foreach (var frame in collection)
+            {
+                using var img = Pix.LoadFromMemory(frame.ToByteArray());
+                using var page = engine.Process(img);
+                sb.AppendLine(page.GetText());
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+
+        internal static string ExtractTextFromImage(List<MemoryStream> imageStreams)
         {
             StringBuilder sb = new();
 
             using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
+
             foreach (var imgStream in imageStreams)
             {
                 imgStream.Position = 0;
                 using var img = Pix.LoadFromMemory(imgStream.ToArray());
                 using var page = engine.Process(img);
-                var text = page.GetText();
-
-                sb.AppendLine(text);
+                sb.AppendLine(page.GetText());
                 sb.AppendLine();
             }
 

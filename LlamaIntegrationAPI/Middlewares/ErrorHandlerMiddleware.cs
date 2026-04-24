@@ -17,6 +17,12 @@ namespace LlamaIntegrationAPI.Middlewares
 
                 logger.LogCritical(ex, "Unhandled exception occurred in the request pipeline. {message}", message);
 
+                if (httpContext.Response.HasStarted)
+                {
+                    logger.LogWarning("Response has already started — cannot write error body.");
+                    return;
+                }
+
                 httpContext.Response.ContentType = "application/json";
                 httpContext.Response.StatusCode = StatusCodes.Status500InternalServerError;
 
