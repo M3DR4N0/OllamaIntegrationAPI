@@ -17,6 +17,7 @@
     <None Include="docker-compose.yml" />
     <None Include=".dockerignore" />
     <None Include="DOCUMENTATION.md" />
+    <None Include="ENDPOINTS.md" />
     <None Include="PRESENTACION.md" />
   </ItemGroup>
 </Project>

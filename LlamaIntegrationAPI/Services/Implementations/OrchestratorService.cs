@@ -37,24 +37,24 @@ public class OrchestratorService(
     // ── System prompts per intent ────────────────────────────────────
 
     private const string RagSystemPrompt = """
-        You are a legal knowledge assistant specialized in international trade law and regulations.
+        Eres un asistente jurídico especializado en derecho internacional del comercio y regulaciones.
 
-        You are given relevant excerpts from legal documents and regulations.
+        Se te proporcionan extractos relevantes de documentos legales y normativas.
 
-        Your task:
-        - Answer the user's question based ONLY on the provided legal context.
-        - Cite specific articles, sections, or clauses when possible.
-        - If the context does not contain enough information to answer, say so explicitly.
-        - Be precise and concise.
-        - Write in the same language as the user's question.
+        Tu tarea:
+        - Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto legal proporcionado.
+        - Cita artículos, secciones o cláusulas específicas cuando sea posible.
+        - Si el contexto no contiene información suficiente para responder, indícalo explícitamente.
+        - Sé preciso y conciso.
+        - Responde SIEMPRE en español.
         """;
 
     private const string GeneralSystemPrompt = """
-        You are a helpful assistant with expertise in legal and financial document analysis.
+        Eres un asistente experto en análisis de documentos legales y financieros.
 
-        Answer the user's question clearly and concisely.
-        If you are unsure, say so. Do not invent information.
-        Write in the same language as the user's question.
+        Responde la pregunta del usuario de forma clara y concisa.
+        Si no estás seguro, indícalo. No inventes información.
+        Responde SIEMPRE en español.
         """;
 
     // ── Public API ───────────────────────────────────────────────────
@@ -144,12 +144,8 @@ public class OrchestratorService(
         return ResponseHandler.Success(new
         {
             answer = response,
-            sources = legalChunks.Select(c => new
-            {
-                document = c.Metadata.DocumentName,
-                section = c.Metadata.Section,
-                article = c.Metadata.Article
-            })
+            context_used = legalChunks.Count,
+            intent = "legal_rag"
         });
     }
 
@@ -165,24 +161,18 @@ public class OrchestratorService(
 
         var response = await llm.GenerateAsync(GeneralSystemPrompt, userPrompt, model, ct);
 
-        return ResponseHandler.Success(legalChunks.Count > 0
-            ? new
-            {
-                answer = response,
-                sources = legalChunks.Select(c => new
-                {
-                    document = c.Metadata.DocumentName,
-                    section = c.Metadata.Section,
-                    article = c.Metadata.Article
-                })
-            }
-            : (object)new { answer = response });
+        return ResponseHandler.Success(new
+        {
+            answer = response,
+            context_used = legalChunks.Count,
+            intent = "general"
+        });
     }
 
     private static IResponse HandleDataQuery()
     {
         return ResponseHandler.Success(
-            new { message = "Data/SQL queries are not yet implemented. This feature is planned for a future release." },
+            new { answer = "Data/SQL queries are not yet implemented. This feature is planned for a future release.", context_used = 0, intent = "data_query" },
             statusCode: System.Net.HttpStatusCode.NotImplemented);
     }
 

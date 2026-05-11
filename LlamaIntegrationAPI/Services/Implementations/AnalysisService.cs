@@ -23,31 +23,19 @@ public class AnalysisService(
     // ── System prompt (as specified in requirements) ─────────────────
 
     private const string SystemPrompt = """
-        You are a legal expert in international trade law.
+        Eres un experto legal en derecho internacional del comercio.
 
-        You are given:
-        1. Contract fragments
-        2. Relevant legal/regulatory excerpts
+        Se te proporcionan:
+        1. Fragmentos del contrato
+        2. Extractos legales/normativos relevantes (si están disponibles)
 
-        Your task:
-        - Determine whether the contract complies with the provided legal/regulatory framework.
-        - Identify specific risks, inconsistencies, or missing clauses.
-        - Reference the exact articles or sections from the legal excerpts that support your analysis.
-        - Provide a concise summary of your findings.
+        Responde de forma exhaustiva a la consulta del usuario basándote en el contexto proporcionado.
 
-        RULES:
-        - Base your analysis ONLY on the provided text. Do NOT invent information.
-        - If no legal excerpts are provided, analyze the contract on its own merits and note the absence of regulatory context.
-        - Be precise: cite article numbers, section names, and clause references when available.
-        - Write in the same language as the contract.
-
-        Return ONLY valid JSON with this exact schema:
-        {
-          "compliance": boolean,
-          "risks": ["string"],
-          "related_articles": ["string"],
-          "summary": "string"
-        }
+        REGLAS:
+        - Basa tu análisis ÚNICAMENTE en el texto proporcionado. NO inventes información.
+        - Si no se proporcionan extractos legales, analiza el contrato por sus propios méritos e indica la ausencia de contexto normativo.
+        - Sé preciso: cita números de artículo, nombres de sección y referencias de cláusula cuando estén disponibles.
+        - Responde SIEMPRE en español, independientemente del idioma del contrato.
         """;
 
     // ── Public API ───────────────────────────────────────────────────
@@ -89,25 +77,10 @@ public class AnalysisService(
         // 5. Build the user prompt from combined context
         var userPrompt = ContextBuilder.Build(request.Query, relevantContractChunks, legalChunks);
 
-        // 6. Call LLM with typed deserialization
-        var result = await llm.GenerateAsync<AnalysisResult>(SystemPrompt, userPrompt, request.Model, ct);
+        // 6. Call LLM and return plain answer
+        var rawResponse = await llm.GenerateAsync(SystemPrompt, userPrompt, request.Model, ct);
 
-        if (result is null)
-        {
-            logger.LogWarning("LLM did not return a valid AnalysisResult — returning fallback.");
-
-            // Fallback: ask again as plain text so we can at least give a summary
-            var rawResponse = await llm.GenerateAsync(SystemPrompt, userPrompt, request.Model, ct);
-            return new AnalysisResult
-            {
-                Compliance = false,
-                Risks = ["LLM response could not be parsed into structured format."],
-                RelatedArticles = [],
-                Summary = rawResponse
-            };
-        }
-
-        return result;
+        return new AnalysisResult { Answer = rawResponse ?? string.Empty };
     }
 
     // ── Private helpers ──────────────────────────────────────────────

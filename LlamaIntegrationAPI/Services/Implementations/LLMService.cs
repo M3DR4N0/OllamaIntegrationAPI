@@ -1,5 +1,6 @@
 using LlamaIntegrationAPI.Helpers;
 using LlamaIntegrationAPI.Services.Interfaces;
+using SharpToken;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -27,6 +28,8 @@ public class LLMService : ILLMService
 
     public async Task<string> GenerateAsync(string systemPrompt, string userPrompt, string model, CancellationToken ct = default)
     {
+        var numCtx = CalculateNumCtx(systemPrompt, userPrompt);
+
         var payload = new
         {
             model,
@@ -34,7 +37,7 @@ public class LLMService : ILLMService
             prompt = userPrompt,
             stream = false,
             format = (object?)null,
-            options = new { temperature = 0 }
+            options = new { temperature = 0, num_ctx = numCtx }
         };
 
         var json = JsonSerializer.Serialize(payload);
@@ -56,6 +59,8 @@ public class LLMService : ILLMService
 
     public async Task<T?> GenerateAsync<T>(string systemPrompt, string userPrompt, string model, CancellationToken ct = default) where T : class
     {
+        var numCtx = CalculateNumCtx(systemPrompt, userPrompt);
+
         // Request JSON format from the model
         var payload = new
         {
@@ -64,7 +69,7 @@ public class LLMService : ILLMService
             prompt = userPrompt,
             stream = false,
             format = "json",
-            options = new { temperature = 0 }
+            options = new { temperature = 0, num_ctx = numCtx }
         };
 
         var json = JsonSerializer.Serialize(payload);
@@ -84,6 +89,17 @@ public class LLMService : ILLMService
         _logger.LogDebug("LLM raw response: {Raw}", result.Response[..Math.Min(result.Response.Length, 300)]);
 
         return JsonSanitizer.TryExtractJson<T>(result.Response);
+    }
+
+    /// <summary>
+    /// Counts tokens in the combined prompt and adds a 2 048-token buffer for
+    /// the model's response, ensuring Ollama never truncates the context window.
+    /// </summary>
+    private static int CalculateNumCtx(string systemPrompt, string userPrompt)
+    {
+        var encoding = GptEncoding.GetEncoding("cl100k_base");
+        var inputTokens = encoding.CountTokens(systemPrompt) + encoding.CountTokens(userPrompt);
+        return inputTokens + 2048;
     }
 
     private sealed class OllamaGenerateResponse
