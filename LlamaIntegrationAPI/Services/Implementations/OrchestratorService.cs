@@ -30,9 +30,7 @@ public class OrchestratorService(
          "legal", "trade", "comercio", "tariff", "arancel",
          "customs", "aduana", "treaty", "tratado", "statutory"];
 
-    private static readonly string[] DataKeywords =
-        ["total", "sum", "count", "average", "aggregate",
-         "how many", "cuántos", "cuánto", "promedio", "suma"];
+    private static readonly string[] DataKeywords = [];
 
     // ── System prompts per intent ────────────────────────────────────
 
@@ -70,7 +68,6 @@ public class OrchestratorService(
         {
             QueryIntent.ContractAnalysis => await HandleContractAnalysis(query, model, file, topK, ct),
             QueryIntent.LegalRag         => await HandleLegalRag(query, model, topK, ct),
-            QueryIntent.DataQuery        => HandleDataQuery(),
             _                            => await HandleGeneral(query, model, topK, ct)
         };
     }
@@ -88,10 +85,6 @@ public class OrchestratorService(
         // File without contract keywords → still route to analysis if file present
         if (file is not null)
             return QueryIntent.ContractAnalysis;
-
-        // Data/aggregation keywords → future SQL pipeline
-        if (DataKeywords.Any(k => lower.Contains(k)))
-            return QueryIntent.DataQuery;
 
         // Legal/regulatory keywords → RAG
         if (LegalKeywords.Any(k => lower.Contains(k)))
@@ -169,13 +162,6 @@ public class OrchestratorService(
         });
     }
 
-    private static IResponse HandleDataQuery()
-    {
-        return ResponseHandler.Success(
-            new { answer = "Data/SQL queries are not yet implemented. This feature is planned for a future release.", context_used = 0, intent = "data_query" },
-            statusCode: System.Net.HttpStatusCode.NotImplemented);
-    }
-
     // ── Shared helpers ───────────────────────────────────────────────
 
     private async Task<IReadOnlyList<DocumentChunk>> RetrieveLegalContext(
@@ -199,7 +185,6 @@ public class OrchestratorService(
     {
         LegalRag,
         ContractAnalysis,
-        DataQuery,
         General
     }
 }
