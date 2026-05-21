@@ -26,9 +26,9 @@ namespace OllamaIntegrationAPI.Services
             var msList = new List<MemoryStream>();
             try
             {
-                if (request.TiffFile != null)
+                if (request.Files != null)
                 {
-                    foreach (var file in request.TiffFile)
+                    foreach (var file in request.Files)
                     {
                         var ms = new MemoryStream();
                         await file.CopyToAsync(ms);
@@ -37,7 +37,7 @@ namespace OllamaIntegrationAPI.Services
                     }
                 }
 
-                var contentType = request.File?.ContentType ?? request.TiffFile?.FirstOrDefault()?.ContentType;
+                var contentType = request.File?.ContentType ?? request.Files?.FirstOrDefault()?.ContentType;
                 logger.LogInformation("Procesando documento con ContentType: {ContentType}", contentType);
 
                 switch (contentType)

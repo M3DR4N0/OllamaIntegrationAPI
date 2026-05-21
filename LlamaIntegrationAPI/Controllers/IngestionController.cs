@@ -19,11 +19,19 @@ public class IngestionController(
 {
     private const string DefaultCollection = "legal_documents";
 
+    /// <summary>
+    /// Ingests a document into the vector store. Send the file using the multipart/form-data field named <b>file</b>.
+    /// </summary>
     [HttpPost("upload")]
+    [Consumes("multipart/form-data")]
     public async Task<IActionResult> IngestDocument([FromForm] IngestionRequest request, CancellationToken ct)
     {
         if (request.File is null)
-            return BadRequest(ResponseHandler.Error("A file is required for ingestion."));
+            return BadRequest(ResponseHandler.Error(
+                "No se recibió ningún archivo. Envíe el archivo usando el campo multipart/form-data llamado 'file'."));
+
+        if (request.File.Length == 0)
+            return BadRequest(ResponseHandler.Error("El archivo recibido está vacío."));
 
         if (string.IsNullOrWhiteSpace(request.DocumentType))
             return BadRequest(ResponseHandler.Error("DocumentType is required."));
@@ -31,7 +39,9 @@ public class IngestionController(
         if (string.IsNullOrWhiteSpace(request.Source))
             return BadRequest(ResponseHandler.Error("Source is required."));
 
-        logger.LogInformation("Ingesting document: {FileName}", request.File.FileName);
+        logger.LogInformation(
+            "[IngestionController] POST /api/ingestion/upload — File: {FileName} | Size: {Size} bytes | ContentType: {ContentType}",
+            request.File.FileName, request.File.Length, request.File.ContentType);
 
         var text = await parser.ExtractTextAsync(request.File);
 

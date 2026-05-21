@@ -39,8 +39,8 @@ namespace LlamaIntegrationAPI.Helpers
 
         public static readonly List<ValidationRule> Rules =
         [
-            new ValidationRule(request => request.File != null || (request.TiffFile != null && request.TiffFile.Count != 0),
-                "El archivo es requerido."),
+            new ValidationRule(request => request.File != null || (request.Files != null && request.Files.Count != 0),
+                "El archivo es requerido. Envíe el archivo usando el campo multipart/form-data llamado 'file'."),
 
             new ValidationRule((request) =>
             {
@@ -48,7 +48,7 @@ namespace LlamaIntegrationAPI.Helpers
 
                 isValid = request.File == null || SupportedContentTypes.Contains(request.File.ContentType);
 
-                isValid = isValid && (request.TiffFile == null || request.TiffFile.All(f => SupportedContentTypes.Contains(f.ContentType)));
+                isValid = isValid && (request.Files == null || request.Files.All(f => SupportedContentTypes.Contains(f.ContentType)));
 
                 return isValid;
             }, "Formato de archivo no soportado.")

@@ -42,21 +42,35 @@ public class AnalysisService(
 
     public async Task<AnalysisResult> AnalyzeContractAsync(AnalysisRequest request, CancellationToken ct = default)
     {
+        var resolvedFile = request.ResolvedFile
+            ?? throw new InvalidOperationException("No file was provided in the request.");
+
+#pragma warning disable CS0618
+        if (request.ContractFile is not null && request.File is null)
+            logger.LogWarning(
+                "[LEGACY] Field 'contractFile' received for endpoint /api/analysis/contract. " +
+                "Please migrate to the standard field 'file'.");
+#pragma warning restore CS0618
+
+        logger.LogInformation(
+            "[AnalysisService] File received — Name: {FileName} | Size: {Size} bytes | ContentType: {ContentType} | Model: {Model} | TopK: {TopK}",
+            resolvedFile.FileName, resolvedFile.Length, resolvedFile.ContentType, request.Model, request.TopK);
+
         // 1. Extract text from the uploaded contract
-        var contractText = await parser.ExtractTextAsync(request.ContractFile);
+        var contractText = await parser.ExtractTextAsync(resolvedFile);
 
         if (string.IsNullOrWhiteSpace(contractText))
             throw new InvalidOperationException("Could not extract text from the contract file.");
 
         logger.LogInformation(
             "Extracted {Chars} chars from contract '{File}'.",
-            contractText.Length, request.ContractFile.FileName);
+            contractText.Length, resolvedFile.FileName);
 
         // 2. Chunk the contract (in-memory only — not persisted)
         var metadata = new ChunkMetadata
         {
-            DocumentName = request.ContractFile.FileName,
-            DocumentType = request.ContractFile.ContentType,
+            DocumentName = resolvedFile.FileName,
+            DocumentType = resolvedFile.ContentType,
             Source = "contract-upload"
         };
         var contractChunks = chunker.Chunk(contractText, metadata);
