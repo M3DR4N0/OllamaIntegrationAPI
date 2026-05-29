@@ -48,8 +48,7 @@ public class AnalysisService(
 #pragma warning disable CS0618
         if (request.ContractFile is not null && request.File is null)
             logger.LogWarning(
-                "[LEGACY] Field 'contractFile' received for endpoint /api/analysis/contract. " +
-                "Please migrate to the standard field 'file'.");
+                "[LEGACY] Field 'contractFile' received. Please migrate to the standard field 'file'.");
 #pragma warning restore CS0618
 
         logger.LogInformation(

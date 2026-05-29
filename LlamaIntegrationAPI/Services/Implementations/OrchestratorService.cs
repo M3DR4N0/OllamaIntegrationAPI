@@ -107,7 +107,7 @@ public class OrchestratorService(
 
         var request = new AnalysisRequest
         {
-            File = file,
+            ContractFile = file,
             Query = query,
             Model = model,
             TopK = topK

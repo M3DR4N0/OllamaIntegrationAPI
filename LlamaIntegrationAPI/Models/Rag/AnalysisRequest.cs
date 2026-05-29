@@ -15,6 +15,6 @@ public class AnalysisRequest
     public IFormFile? ResolvedFile => File ?? ContractFile;
 
     public string Query { get; set; } = string.Empty;
-    public string Model { get; set; } = "gemma3:1b";
+    public string Model { get; set; } = "gemma3:1b"; 
     public int TopK { get; set; } = 5;
 }

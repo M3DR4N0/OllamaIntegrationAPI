@@ -48,7 +48,7 @@ namespace OllamaIntegrationAPI.Services
                         break;
 
                     case "application/pdf":
-                        documentText = ExtractTextFromPdf(stream!);
+                        documentText = ExtractTextFromPdf(stream!, logger);
                         break;
 
                     case "image/jpeg":
@@ -79,7 +79,7 @@ namespace OllamaIntegrationAPI.Services
 
         }
 
-        internal static string ExtractTextFromPdf(Stream pdfStream)
+        internal static string ExtractTextFromPdf(Stream pdfStream, ILogger? logger = null)
         {
             var sb = new StringBuilder();
             TesseractEngine? engine = null;
@@ -120,7 +120,22 @@ namespace OllamaIntegrationAPI.Services
 
                         foreach (var image in page.GetImages())
                         {
-                            using var pix = Pix.LoadFromMemory([.. image.RawBytes]);
+                            // RawBytes are compressed (JPEG, CCITT, etc.) — decode via ImageMagick
+                            // into raw PNG so Tesseract can load them correctly.
+                            byte[] pngBytes;
+                            try
+                            {
+                                using var magick = new MagickImage([.. image.RawBytes]);
+                                magick.Format = MagickFormat.Png;
+                                pngBytes = magick.ToByteArray();
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogWarning(ex, "Skipping embedded PDF image — ImageMagick could not decode it.");
+                                continue;
+                            }
+
+                            using var pix = Pix.LoadFromMemory(pngBytes);
                             using var result = engine.Process(pix);
                             sb.AppendLine(result.GetText());
                             sb.AppendLine();

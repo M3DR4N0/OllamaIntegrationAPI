@@ -39,7 +39,7 @@ public class DocumentParserService(ILogger<DocumentParserService> logger) : IDoc
                 => DocumentProcessor.ExtractTextFromWord(stream),
 
             "application/pdf"
-                => DocumentProcessor.ExtractTextFromPdf(stream),
+                => DocumentProcessor.ExtractTextFromPdf(stream, logger),
 
             _ when ImageTypes.Contains(contentType)
                 => DocumentProcessor.ExtractTextFromImage(stream),

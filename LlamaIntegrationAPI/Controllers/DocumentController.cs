@@ -43,24 +43,12 @@ namespace LlamaIntegrationAPI.Controllers
         }
 
         [HttpPost("extract-file")]
-        [Consumes("multipart/form-data")]
         public async Task<IActionResult> ExtractFromFile(
             [FromForm] ExtractFromFileRequest request,
             CancellationToken ct)
         {
             if (!LlamaRequestValidation.IsValid(request, out var errorMessage))
                 return BadRequest(ResponseHandler.Error(errorMessage));
-
-            var primaryFile = request.File ?? request.Files?.FirstOrDefault();
-            if (primaryFile is not null && primaryFile.Length == 0)
-                return BadRequest(ResponseHandler.Error("El archivo recibido está vacío."));
-
-            _logger.LogInformation(
-                "[DocumentController] POST /api/document/extract-file — File: {FileName} | Size: {Size} bytes | ContentType: {ContentType} | MultiFile count: {Count}",
-                request.File?.FileName ?? "(none)",
-                request.File?.Length ?? 0,
-                request.File?.ContentType ?? request.Files?.FirstOrDefault()?.ContentType ?? "unknown",
-                request.Files?.Count ?? 0);
 
             // 1. Extract text (reuse existing logic — handles PDF, Word, images, TIFFs)
             var text = await _documentProcessor.ProcessAsync(request).ConfigureAwait(false);
@@ -71,8 +59,8 @@ namespace LlamaIntegrationAPI.Controllers
             // 2. Chunk the document instead of sending the full text
             var metadata = new ChunkMetadata
             {
-                DocumentName = request.File?.FileName ?? request.Files?.FirstOrDefault()?.FileName ?? "uploaded",
-                DocumentType = request.File?.ContentType ?? request.Files?.FirstOrDefault()?.ContentType ?? "unknown",
+                DocumentName = request.File?.FileName ?? "uploaded",
+                DocumentType = request.File?.ContentType ?? "unknown",
                 Source = "user-upload"
             };
             var docChunks = _chunker.Chunk(text, metadata);
