@@ -69,8 +69,63 @@ public class AnalysisController(
             request.ResolvedFile.FileName, request.ResolvedFile.Length,
             request.ResolvedFile.ContentType, request.Model, request.TopK);
 
-        var result = await analysisService.AnalyzeContractAsync(request, ct);
+        try
+        {
+            var result = await analysisService.AnalyzeContractAsync(request, ct);
+            return Ok(ResponseHandler.Success(result));
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("No se pudo extraer texto"))
+        {
+            logger.LogWarning(ex, "[AnalysisController] No se pudo extraer texto del archivo.");
+            return UnprocessableEntity(ResponseHandler.Error(ex.Message, System.Net.HttpStatusCode.UnprocessableEntity));
+        }
+    }
 
-        return Ok(ResponseHandler.Success(result));
+    /// <summary>
+    /// Analyzes two or more documents together against the legal knowledge base.
+    /// Send each file using multipart/form-data with the field name <b>files</b>.
+    /// </summary>
+    /// <remarks>
+    /// Example curl:
+    ///
+    ///     curl -X POST "http://localhost:5000/api/analysis/multi" \
+    ///       -F "files=@C:\Temp\contrato1.pdf" \
+    ///       -F "files=@C:\Temp\contrato2.pdf" \
+    ///       -F "query=Compara las obligaciones de ambos contratos" \
+    ///       -F "model=gemma3:1b" \
+    ///       -F "topK=8"
+    /// </remarks>
+    [HttpPost("multi")]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> AnalyzeMultipleDocuments(
+        [FromForm] MultiDocumentAnalysisRequest request, CancellationToken ct)
+    {
+        if (request.Files is null || request.Files.Count == 0)
+            return BadRequest(ResponseHandler.Error(
+                "Se requieren al menos dos archivos. Envíelos usando el campo multipart/form-data llamado 'files'."));
+
+        if (request.Files.Any(f => f.Length == 0))
+            return BadRequest(ResponseHandler.Error("Uno o más archivos recibidos están vacíos."));
+
+        if (string.IsNullOrWhiteSpace(request.Query))
+            return BadRequest(ResponseHandler.Error("La consulta (query) es requerida."));
+
+        if (string.IsNullOrWhiteSpace(request.Model))
+            request.Model = "gemma3:1b";
+
+        logger.LogInformation(
+            "[AnalysisController] POST /api/analysis/multi — {Count} archivo(s) | Model: {Model} | TopK: {TopK}",
+            request.Files.Count, request.Model, request.TopK);
+
+        try
+        {
+            var result = await analysisService.AnalyzeMultipleDocumentsAsync(request, ct);
+            return Ok(ResponseHandler.Success(result));
+        }
+        catch (InvalidOperationException ex)
+        {
+            logger.LogWarning(ex, "[AnalysisController] Error procesando múltiples documentos.");
+            return UnprocessableEntity(ResponseHandler.Error(ex.Message, System.Net.HttpStatusCode.UnprocessableEntity));
+        }
     }
 }

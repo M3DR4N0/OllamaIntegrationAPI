@@ -84,62 +84,116 @@ namespace OllamaIntegrationAPI.Services
             var sb = new StringBuilder();
             TesseractEngine? engine = null;
 
+            // Magick.NET necesita leer el PDF desde bytes (no desde stream que ya usa PdfPig)
+            byte[] pdfBytes;
+            using (var ms = new MemoryStream())
+            {
+                pdfStream.CopyTo(ms);
+                pdfBytes = ms.ToArray();
+            }
+
             try
             {
-                using var pdf = PdfDocument.Open(pdfStream);
+                using var pdf = PdfDocument.Open(new MemoryStream(pdfBytes));
+                var totalPages = pdf.NumberOfPages;
+                logger?.LogInformation("[PDF] Abriendo PDF con {Pages} página(s).", totalPages);
 
                 foreach (var page in pdf.GetPages())
                 {
                     var words = page.GetWords().OrderBy(w => w.BoundingBox.Bottom).ToList();
+                    logger?.LogInformation("[PDF] Página {PageNum}: {WordCount} palabras encontradas.", page.Number, words.Count);
 
-                    double currentLineY = double.MinValue;
-
-                    foreach (var word in words)
+                    if (words.Count > 0)
                     {
-                        if (Math.Abs(word.BoundingBox.Bottom - currentLineY) > 5)
+                        // Texto digital — extraer directamente
+                        double currentLineY = double.MinValue;
+                        foreach (var word in words)
                         {
-                            if (sb.Length > 0)
-                                sb.AppendLine();
-
-                            currentLineY = word.BoundingBox.Bottom;
+                            if (Math.Abs(word.BoundingBox.Bottom - currentLineY) > 5)
+                            {
+                                if (sb.Length > 0) sb.AppendLine();
+                                currentLineY = word.BoundingBox.Bottom;
+                            }
+                            else
+                            {
+                                sb.Append(' ');
+                            }
+                            sb.Append(word.Text);
                         }
-                        else
-                        {
-                            sb.Append(' ');
-                        }
-
-                        sb.Append(word.Text);
+                        sb.AppendLine();
+                        continue;
                     }
 
-                    sb.AppendLine();
+                    // Página sin texto — intentar con imágenes embebidas primero
+                    var embeddedImages = page.GetImages().ToList();
+                    logger?.LogInformation("[PDF] Página {PageNum} sin texto — {ImageCount} imagen(es) embebida(s).", page.Number, embeddedImages.Count);
 
-                    if (words.Count == 0)
+                    if (embeddedImages.Count > 0)
                     {
-                        // Lazy-create a single engine for all OCR pages
-                        engine ??= new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
-
-                        foreach (var image in page.GetImages())
+                        // Inicializar Tesseract si no está listo
+                        if (engine == null)
                         {
-                            // RawBytes are compressed (JPEG, CCITT, etc.) — decode via ImageMagick
-                            // into raw PNG so Tesseract can load them correctly.
-                            byte[] pngBytes;
+                            try { engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default); }
+                            catch (Exception ex)
+                            {
+                                logger?.LogError(ex, "[PDF] No se pudo inicializar Tesseract OCR.");
+                                goto renderPage;
+                            }
+                        }
+
+                        var ocrFromEmbedded = false;
+                        foreach (var image in embeddedImages)
+                        {
                             try
                             {
                                 using var magick = new MagickImage([.. image.RawBytes]);
                                 magick.Format = MagickFormat.Png;
-                                pngBytes = magick.ToByteArray();
+                                var pngBytes = magick.ToByteArray();
+                                using var pix = Pix.LoadFromMemory(pngBytes);
+                                using var result = engine.Process(pix);
+                                var ocrText = result.GetText();
+                                if (!string.IsNullOrWhiteSpace(ocrText))
+                                {
+                                    sb.AppendLine(ocrText);
+                                    ocrFromEmbedded = true;
+                                }
                             }
                             catch (Exception ex)
                             {
-                                logger.LogWarning(ex, "Skipping embedded PDF image — ImageMagick could not decode it.");
-                                continue;
+                                logger?.LogWarning(ex, "[PDF] Fallo al OCR imagen embebida en página {PageNum}.", page.Number);
                             }
-
-                            using var pix = Pix.LoadFromMemory(pngBytes);
-                            using var result = engine.Process(pix);
-                            sb.AppendLine(result.GetText());
-                            sb.AppendLine();
                         }
+
+                        if (ocrFromEmbedded) continue;
+                    }
+
+                    // Fallback: renderizar la página entera con Magick.NET (requiere Ghostscript)
+                    renderPage:
+                    logger?.LogInformation("[PDF] Página {PageNum} — renderizando con Magick.NET/Ghostscript para OCR.", page.Number);
+                    try
+                    {
+                        var settings = new MagickReadSettings
+                        {
+                            Density = new Density(300, DensityUnit.PixelsPerInch),
+                            FrameIndex = (uint)(page.Number - 1),
+                            FrameCount = 1,
+                            Format = MagickFormat.Pdf
+                        };
+
+                        using var rendered = new MagickImage(pdfBytes, settings);
+                        rendered.Format = MagickFormat.Png;
+                        var renderedPng = rendered.ToByteArray();
+
+                        engine ??= new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
+                        using var pix = Pix.LoadFromMemory(renderedPng);
+                        using var result = engine.Process(pix);
+                        var ocrText = result.GetText();
+                        logger?.LogInformation("[PDF] Ghostscript+OCR extrajo {Chars} chars en página {PageNum}.", ocrText?.Length ?? 0, page.Number);
+                        sb.AppendLine(ocrText);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.LogError(ex, "[PDF] Fallback Ghostscript+OCR falló en página {PageNum}.", page.Number);
                     }
                 }
             }

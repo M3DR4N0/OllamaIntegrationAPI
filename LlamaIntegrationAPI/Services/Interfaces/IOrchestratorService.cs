@@ -11,5 +11,12 @@ public interface IOrchestratorService
     /// Determines the intent from the query and routes to the correct service
     /// (RAG for legal queries, analysis for contract queries, etc.).
     /// </summary>
-    Task<IResponse> HandleAsync(string query, string model, IFormFile? file = null, int topK = 5, CancellationToken ct = default);
+    Task<IResponse> HandleAsync(
+        string query,
+        string model,
+        IFormFile? file = null,
+        int topK = 5,
+        bool forceSpanish = true,
+        bool reviewWithAi = true,
+        CancellationToken ct = default);
 }

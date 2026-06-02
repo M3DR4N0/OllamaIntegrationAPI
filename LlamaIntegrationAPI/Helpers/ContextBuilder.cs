@@ -56,6 +56,9 @@ public static class ContextBuilder
             }
         }
 
+        sb.AppendLine("=== INSTRUCCIÓN OBLIGATORIA ===");
+        sb.AppendLine("Responde SIEMPRE en español, independientemente del idioma del contexto o los documentos.");
+
         return sb.ToString();
     }
 }

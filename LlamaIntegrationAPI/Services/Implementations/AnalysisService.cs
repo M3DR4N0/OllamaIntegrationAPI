@@ -1,12 +1,14 @@
 using LlamaIntegrationAPI.Helpers;
+using LlamaIntegrationAPI.Models.Ai;
 using LlamaIntegrationAPI.Models.Rag;
+using LlamaIntegrationAPI.Services.Ai;
 using LlamaIntegrationAPI.Services.Interfaces;
 
 namespace LlamaIntegrationAPI.Services.Implementations;
 
 /// <summary>
 /// Contract analysis pipeline:
-/// Extract → Chunk (in-memory) → Retrieve legal context → LLM → structured JSON.
+/// Extract -> Chunk (in-memory) -> Retrieve legal context -> LLM -> AI review -> final answer.
 /// Contract chunks are NEVER stored in the vector database.
 /// </summary>
 public class AnalysisService(
@@ -15,30 +17,27 @@ public class AnalysisService(
     IEmbeddingService embedder,
     IVectorStoreService vectorStore,
     ILLMService llm,
+    IAiAnswerReviewService answerReviewService,
     ILogger<AnalysisService> logger) : IAnalysisService
 {
     private const string LegalCollection = "legal_documents";
     private const int MaxContractChunks = 12;
-
-    // ── System prompt (as specified in requirements) ─────────────────
 
     private const string SystemPrompt = """
         Eres un experto legal en derecho internacional del comercio.
 
         Se te proporcionan:
         1. Fragmentos del contrato
-        2. Extractos legales/normativos relevantes (si están disponibles)
+        2. Extractos legales/normativos relevantes (si estan disponibles)
 
-        Responde de forma exhaustiva a la consulta del usuario basándote en el contexto proporcionado.
+        Responde de forma exhaustiva a la consulta del usuario basandote en el contexto proporcionado.
 
         REGLAS:
-        - Basa tu análisis ÚNICAMENTE en el texto proporcionado. NO inventes información.
-        - Si no se proporcionan extractos legales, analiza el contrato por sus propios méritos e indica la ausencia de contexto normativo.
-        - Sé preciso: cita números de artículo, nombres de sección y referencias de cláusula cuando estén disponibles.
-        - Responde SIEMPRE en español, independientemente del idioma del contrato.
+        - Basa tu analisis UNICAMENTE en el texto proporcionado. NO inventes informacion.
+        - Si no se proporcionan extractos legales, analiza el contrato por sus propios meritos e indica la ausencia de contexto normativo.
+        - Se preciso: cita numeros de articulo, nombres de seccion y referencias de clausula cuando esten disponibles.
+        - Responde SIEMPRE en espanol, independientemente del idioma del contrato.
         """;
-
-    // ── Public API ───────────────────────────────────────────────────
 
     public async Task<AnalysisResult> AnalyzeContractAsync(AnalysisRequest request, CancellationToken ct = default)
     {
@@ -52,20 +51,30 @@ public class AnalysisService(
 #pragma warning restore CS0618
 
         logger.LogInformation(
-            "[AnalysisService] File received — Name: {FileName} | Size: {Size} bytes | ContentType: {ContentType} | Model: {Model} | TopK: {TopK}",
-            resolvedFile.FileName, resolvedFile.Length, resolvedFile.ContentType, request.Model, request.TopK);
+            "[AnalysisService] File received - Name: {FileName} | Size: {Size} bytes | ContentType: {ContentType} | Model: {Model} | TopK: {TopK} | ReviewWithAi: {ReviewWithAi} | ForceSpanish: {ForceSpanish}",
+            resolvedFile.FileName,
+            resolvedFile.Length,
+            resolvedFile.ContentType,
+            request.Model,
+            request.TopK,
+            request.ReviewWithAi,
+            request.ForceSpanish);
 
-        // 1. Extract text from the uploaded contract
         var contractText = await parser.ExtractTextAsync(resolvedFile);
 
         if (string.IsNullOrWhiteSpace(contractText))
-            throw new InvalidOperationException("Could not extract text from the contract file.");
+        {
+            throw new InvalidOperationException(
+                $"No se pudo extraer texto del archivo '{resolvedFile.FileName}'. " +
+                "El archivo puede estar en blanco, ser un PDF escaneado sin OCR disponible, " +
+                "o estar en un formato no compatible.");
+        }
 
         logger.LogInformation(
             "Extracted {Chars} chars from contract '{File}'.",
-            contractText.Length, resolvedFile.FileName);
+            contractText.Length,
+            resolvedFile.FileName);
 
-        // 2. Chunk the contract (in-memory only — not persisted)
         var metadata = new ChunkMetadata
         {
             DocumentName = resolvedFile.FileName,
@@ -76,27 +85,36 @@ public class AnalysisService(
 
         logger.LogInformation("Contract split into {Count} chunks.", contractChunks.Count);
 
-        // 3. Select the most relevant contract chunks for the query
         var relevantContractChunks = await RankChunksByRelevance(
-            contractChunks, request.Query, MaxContractChunks, ct);
+            contractChunks,
+            request.Query,
+            MaxContractChunks,
+            ct);
 
-        // 4. Retrieve legal/regulatory context from the vector store
         var legalChunks = await RetrieveLegalContext(request.Query, request.TopK, ct);
 
         logger.LogInformation(
             "Analysis context: {DocChunks} contract chunks + {LegalChunks} legal chunks.",
-            relevantContractChunks.Count, legalChunks.Count);
+            relevantContractChunks.Count,
+            legalChunks.Count);
 
-        // 5. Build the user prompt from combined context
         var userPrompt = ContextBuilder.Build(request.Query, relevantContractChunks, legalChunks);
-
-        // 6. Call LLM and return plain answer
         var rawResponse = await llm.GenerateAsync(SystemPrompt, userPrompt, request.Model, ct);
+        var reviewedAnswer = await FinalizeAnswerAsync(
+            request.Query,
+            rawResponse ?? string.Empty,
+            "single_contract_analysis",
+            request.ForceSpanish,
+            request.ReviewWithAi,
+            ct);
 
-        return new AnalysisResult { Answer = rawResponse ?? string.Empty };
+        return new AnalysisResult
+        {
+            Answer = reviewedAnswer.FinalAnswer,
+            OllamaAnswer = reviewedAnswer.OllamaAnswer,
+            GeminiAnswer = reviewedAnswer.GeminiAnswer
+        };
     }
-
-    // ── Private helpers ──────────────────────────────────────────────
 
     private async Task<IReadOnlyList<DocumentChunk>> RankChunksByRelevance(
         IReadOnlyList<DocumentChunk> chunks,
@@ -107,14 +125,19 @@ public class AnalysisService(
         if (chunks.Count <= maxChunks)
             return chunks;
 
+        var preFiltered = KeywordPreFilter(chunks, query, maxChunks * 3);
+
         logger.LogInformation(
-            "Ranking {Total} contract chunks — selecting top {K}.", chunks.Count, maxChunks);
+            "Ranking {Total} contract chunks - pre-filtered to {PreFiltered}, selecting top {K}.",
+            chunks.Count,
+            preFiltered.Count,
+            maxChunks);
 
         var queryEmbedding = await embedder.GenerateEmbeddingAsync(query, ct);
-        var chunkTexts = chunks.Select(c => c.Text).ToList();
+        var chunkTexts = preFiltered.Select(c => c.Text).ToList();
         var chunkEmbeddings = await embedder.GenerateEmbeddingsAsync(chunkTexts, ct);
 
-        return chunks
+        return preFiltered
             .Select((chunk, i) => (
                 Chunk: chunk,
                 Score: VectorMath.CosineSimilarity(queryEmbedding, chunkEmbeddings[i])))
@@ -124,8 +147,39 @@ public class AnalysisService(
             .ToList();
     }
 
+    private static IReadOnlyList<DocumentChunk> KeywordPreFilter(
+        IReadOnlyList<DocumentChunk> chunks,
+        string query,
+        int limit)
+    {
+        var tokens = query
+            .ToLowerInvariant()
+            .Split([' ', ',', '.', ';', ':', '?', '!', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(t => t.Length > 3)
+            .ToHashSet();
+
+        if (tokens.Count == 0)
+            return chunks;
+
+        var scored = chunks
+            .Select(c => (
+                Chunk: c,
+                Score: tokens.Count(t => c.Text.Contains(t, StringComparison.OrdinalIgnoreCase))))
+            .OrderByDescending(x => x.Score)
+            .ToList();
+
+        var candidates = scored.Take(limit).Select(x => x.Chunk).ToList();
+
+        if (candidates.Count < limit)
+            return chunks;
+
+        return candidates;
+    }
+
     private async Task<IReadOnlyList<DocumentChunk>> RetrieveLegalContext(
-        string query, int topK, CancellationToken ct)
+        string query,
+        int topK,
+        CancellationToken ct)
     {
         try
         {
@@ -134,8 +188,98 @@ public class AnalysisService(
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex, "No legal context available — vector store may be empty.");
+            logger.LogDebug(ex, "No legal context available - vector store may be empty.");
             return [];
         }
+    }
+
+    public async Task<AnalysisResult> AnalyzeMultipleDocumentsAsync(
+        MultiDocumentAnalysisRequest request,
+        CancellationToken ct = default)
+    {
+        if (request.Files.Count == 0)
+            throw new InvalidOperationException("Se requiere al menos un archivo.");
+
+        var allChunks = new List<DocumentChunk>();
+
+        foreach (var file in request.Files)
+        {
+            var text = await parser.ExtractTextAsync(file);
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                logger.LogWarning("[MultiDoc] No se pudo extraer texto de '{File}' - se omite.", file.FileName);
+                continue;
+            }
+
+            logger.LogInformation("[MultiDoc] '{File}' -> {Chars} chars.", file.FileName, text.Length);
+
+            var metadata = new ChunkMetadata
+            {
+                DocumentName = file.FileName,
+                DocumentType = file.ContentType,
+                Source = "multi-doc-upload"
+            };
+
+            allChunks.AddRange(chunker.Chunk(text, metadata));
+        }
+
+        if (allChunks.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "No se pudo extraer texto de ninguno de los archivos proporcionados.");
+        }
+
+        logger.LogInformation("[MultiDoc] Total de chunks combinados: {Count}.", allChunks.Count);
+
+        var relevantChunks = await RankChunksByRelevance(
+            allChunks,
+            request.Query,
+            MaxContractChunks,
+            ct);
+
+        var legalChunks = await RetrieveLegalContext(request.Query, request.TopK, ct);
+        var userPrompt = ContextBuilder.Build(request.Query, relevantChunks, legalChunks);
+        var rawResponse = await llm.GenerateAsync(SystemPrompt, userPrompt, request.Model, ct);
+        var reviewedAnswer = await FinalizeAnswerAsync(
+            request.Query,
+            rawResponse ?? string.Empty,
+            "multi_document_analysis",
+            request.ForceSpanish,
+            request.ReviewWithAi,
+            ct);
+
+        return new AnalysisResult
+        {
+            Answer = reviewedAnswer.FinalAnswer,
+            OllamaAnswer = reviewedAnswer.OllamaAnswer,
+            GeminiAnswer = reviewedAnswer.GeminiAnswer
+        };
+    }
+
+    private async Task<AiAnswerReviewResult> FinalizeAnswerAsync(
+        string query,
+        string rawAnswer,
+        string scenario,
+        bool forceSpanish,
+        bool reviewWithAi,
+        CancellationToken ct)
+    {
+        if (!reviewWithAi)
+        {
+            return new AiAnswerReviewResult
+            {
+                FinalAnswer = rawAnswer,
+                OllamaAnswer = rawAnswer
+            };
+        }
+
+        return await answerReviewService.ReviewAnswerAsync(
+            query,
+            rawAnswer,
+            scenario,
+            forceSpanish,
+            "Review the contract analysis and ensure the final response matches the requested format and language.",
+            ct);
     }
 }

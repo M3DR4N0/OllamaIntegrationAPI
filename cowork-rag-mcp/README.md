@@ -1,99 +1,59 @@
 # cowork-rag-mcp
 
-MVP tecnico de servidor MCP local para conectar Claude Desktop / Claude Cowork con una API local de RAG documental en .NET 9.
-
-La arquitectura objetivo es:
+Servidor MCP local para conectar Claude Desktop con la API RAG documental en .NET 9.
 
 ```text
-Claude Desktop / Claude Cowork
-  -> MCP Server local Node.js/TypeScript
-    -> API .NET local http://localhost:5000
-      -> Ollama + Qdrant + OCR
+Claude Desktop
+  -> MCP Server (Node.js / TypeScript)
+    -> API .NET  http://localhost:5000
+      -> Ollama + Qdrant + OCR (Ghostscript + Tesseract)
 ```
 
-El modelo por defecto es `gemma3:1b`.
-
-## Objetivo
-
-Este MVP permite que Claude use herramientas externas para:
-
-- verificar si la API local esta activa
-- consultar la base documental local
-- generar contexto para informes ejecutivos
-- analizar contratos ya indexados
-- enviar un archivo local a la API usando `multipart/form-data`
-- recibir respuestas JSON con fuentes, riesgos, obligaciones y resumen si la API los devuelve
+---
 
 ## Requisitos
 
-- Node.js 18 o superior
-- pnpm
-- API .NET local disponible en `http://localhost:5000`
+- Node.js 18 o superior (`node --version`)
+- pnpm (`npm i -g pnpm`)
+- API .NET local corriendo en `http://localhost:5000`
+- Ollama corriendo con los modelos `gemma3:1b` y `nomic-embed-text`
 
-## Instalacion
+---
+
+## Instalacion y compilacion
 
 ```powershell
-cd C:\apis\OllamaIntegrationAPI\cowork-rag-mcp
+cd D:\Repository\MANDEZCA\LlamaIntegrationAPI\cowork-rag-mcp
 pnpm install
-```
-
-## Ejecucion local
-
-Modo desarrollo:
-
-```powershell
-pnpm dev
-```
-
-Compilar:
-
-```powershell
 pnpm build
 ```
 
-Ejecutar compilado:
+El output compilado queda en `dist/`.
 
-```powershell
-pnpm start
+---
+
+## Configuracion en Claude Desktop
+
+Archivo de configuracion:
+
 ```
-
-Importante: el servidor usa transporte `stdio`. No imprime logs normales por `stdout`, porque eso rompe el protocolo MCP. Los errores se envian por `stderr`.
-
-## Variables de entorno
-
-```powershell
-RAG_API_URL=http://localhost:5000
-RAG_DEFAULT_MODEL=gemma3:1b
-RAG_TIMEOUT_MS=60000
-RAG_ALLOWED_FILE_ROOT=C:\Temp
-```
-
-`RAG_ALLOWED_FILE_ROOT` es opcional. Si se configura, la herramienta `analizar_archivo_local` solo permite leer archivos dentro de esa carpeta.
-
-## Configuracion en Claude Desktop para Windows
-
-Archivo aproximado:
-
-```text
 %APPDATA%\Claude\claude_desktop_config.json
 ```
 
-Ejemplo:
+**Usa siempre `node` con ruta absoluta - NO uses `pnpm dev` porque Claude Desktop puede no tener pnpm en el PATH.**
 
 ```json
 {
   "mcpServers": {
     "fp-local-rag": {
-      "command": "pnpm",
+      "command": "C:\\Program Files\\nodejs\\node.exe",
       "args": [
-        "--dir",
-        "C:\\apis\\OllamaIntegrationAPI\\cowork-rag-mcp",
-        "dev"
+        "D:\\Repository\\MANDEZCA\\LlamaIntegrationAPI\\cowork-rag-mcp\\dist\\server.js"
       ],
       "env": {
         "RAG_API_URL": "http://localhost:5000",
         "RAG_DEFAULT_MODEL": "gemma3:1b",
-        "RAG_TIMEOUT_MS": "60000",
+        "RAG_TIMEOUT_MS": "120000",
         "RAG_ALLOWED_FILE_ROOT": "C:\\Temp"
       }
     }
@@ -101,222 +61,104 @@ Ejemplo:
 }
 ```
 
-Despues de editar el archivo, reinicia Claude Desktop.
+> **Importante:** despues de editar el archivo, cierra Claude Desktop completamente desde la bandeja del sistema y vuelve a abrirlo.
+
+---
+
+## Variables de entorno
+
+| Variable | Default | Descripcion |
+|---|---|---|
+| `RAG_API_URL` | `http://localhost:5000` | URL base de la API .NET |
+| `RAG_DEFAULT_MODEL` | `gemma3:1b` | Modelo Ollama a usar |
+| `RAG_TIMEOUT_MS` | `120000` | Timeout por peticion en ms |
+| `RAG_ALLOWED_FILE_ROOT` | (ninguno) | Restringe `analizar_archivo_local` a esa carpeta |
+
+> El timeout es 120 segundos porque el analisis de PDFs escaneados (OCR + embeddings + LLM) puede tardar entre 1 y 3 minutos.
+
+---
 
 ## Herramientas disponibles
 
-### health_check_rag
+### `health_check_rag`
+Verifica si la API local esta disponible. Intenta `GET /health` y si falla intenta `GET /`.
 
-Verifica si la API local esta disponible.
+Sin parametros.
 
-Primero intenta:
+---
 
-```http
-GET /health
-```
+### `consultar_base_documental`
+Consulta la base documental mediante `POST /api/query`.
 
-Si falla, intenta:
+| Parametro | Tipo | Default | Descripcion |
+|---|---|---|---|
+| `pregunta` | string | requerido | Pregunta en lenguaje natural |
+| `topK` | number | 5 | Chunks a recuperar del vector store |
+| `model` | string | gemma3:1b | Modelo Ollama |
 
-```http
-GET /
-```
-
-Respuesta esperada cuando la API responde:
-
+Respuesta esperada:
 ```json
-{
-  "success": true,
-  "message": "API local disponible",
-  "url": "http://localhost:5000"
-}
+{ "data": { "answer": "...", "context_used": 4, "intent": "legal_rag" } }
 ```
 
-### consultar_base_documental
+---
 
-Consulta la base documental local.
+### `generar_informe_contextual`
+Construye una query estructurada para informe ejecutivo y llama a `POST /api/query`.
 
-Endpoint:
+| Parametro | Tipo | Default |
+|---|---|---|
+| `tema` | string | requerido |
+| `incluirRiesgos` | boolean | true |
+| `incluirObligaciones` | boolean | true |
+| `incluirFechasCriticas` | boolean | true |
+| `incluirFuentes` | boolean | true |
+| `topK` | number | 10 |
+| `model` | string | gemma3:1b |
 
-```http
-POST /api/query
-```
+---
 
-Parametros:
+### `analizar_contrato_local`
+Analiza un contrato por texto (sin subir archivo) mediante `POST /api/query`.
 
-- `pregunta`: string requerido
-- `topK`: number opcional, default `5`
-- `model`: string opcional, default `gemma3:1b`
+| Parametro | Tipo | Default |
+|---|---|---|
+| `pregunta` | string | requerido |
+| `topK` | number | 8 |
+| `model` | string | gemma3:1b |
 
-Payload enviado a la API:
+---
 
+### `listar_documentos_locales`
+Lista documentos indexados en el vector store mediante `GET /api/agent/documents`.
+
+Sin parametros. Devuelve 404 manejado si el endpoint no esta implementado.
+
+---
+
+### `analizar_archivo_local`
+Sube un archivo local a `POST /api/analysis/contract` via `multipart/form-data`. Soporta PDF, Word, imagenes y TIFF.
+
+| Parametro | Tipo | Default |
+|---|---|---|
+| `filePath` | string | requerido - ruta absoluta al archivo |
+| `pregunta` | string | requerido |
+| `model` | string | gemma3:1b |
+| `topK` | number | 8 |
+
+Respuesta esperada:
 ```json
-{
-  "query": "pregunta del usuario",
-  "model": "gemma3:1b",
-  "topK": 5
-}
+{ "data": { "answer": "El contrato establece en su clausula 3..." } }
 ```
 
-### generar_informe_contextual
+---
 
-Construye una pregunta estructurada para preparar contexto de informe ejecutivo y llama a:
+## Diagnostico de problemas comunes
 
-```http
-POST /api/query
-```
-
-Parametros:
-
-- `tema`: string requerido
-- `incluirRiesgos`: boolean opcional, default `true`
-- `incluirObligaciones`: boolean opcional, default `true`
-- `incluirFechasCriticas`: boolean opcional, default `true`
-- `incluirFuentes`: boolean opcional, default `true`
-- `topK`: number opcional, default `10`
-- `model`: string opcional, default `gemma3:1b`
-
-### analizar_contrato_local
-
-Analiza contratos o documentos legales ya indexados.
-
-Endpoint:
-
-```http
-POST /api/analysis/contract
-```
-
-Payload:
-
-```json
-{
-  "query": "pregunta legal o contractual",
-  "model": "gemma3:1b",
-  "topK": 8
-}
-```
-
-### listar_documentos_locales
-
-Lista documentos indexados o disponibles.
-
-Endpoint:
-
-```http
-GET /api/agent/documents
-```
-
-Si la API devuelve `404`, el MCP responde:
-
-```text
-El endpoint /api/agent/documents todavia no esta implementado en la API .NET.
-```
-
-### analizar_archivo_local
-
-Envia un archivo local a la API con `multipart/form-data`.
-
-Endpoint:
-
-```http
-POST /api/analysis/contract
-```
-
-Parametros:
-
-- `filePath`: string requerido
-- `pregunta`: string requerido
-- `model`: string opcional, default `gemma3:1b`
-- `topK`: number opcional, default `8`
-
-Campos enviados:
-
-```text
-file = archivo leido desde filePath
-query = pregunta
-model = model
-topK = topK
-```
-
-El campo del archivo debe llamarse exactamente `file`. No uses nombres alternativos para el campo multipart del archivo.
-
-Extensiones esperadas:
-
-- `.pdf`
-- `.docx`
-- `.txt`
-- `.tif`
-- `.tiff`
-- `.png`
-- `.jpg`
-- `.jpeg`
-
-Si se envia `.tif` o `.tiff`, se asume que puede ser TIFF multipagina. La API local debe encargarse de procesar todas las paginas.
-
-## Prompts de prueba
-
-```text
-Usa health_check_rag para verificar si mi API local esta disponible.
-```
-
-```text
-Usa consultar_base_documental para buscar obligaciones, riesgos y fechas criticas relacionadas con los documentos cargados.
-```
-
-```text
-Usa generar_informe_contextual para preparar un informe ejecutivo sobre los contratos cargados. Incluye resumen, riesgos, obligaciones, fechas criticas, fuentes y preguntas pendientes.
-```
-
-```text
-Usa analizar_archivo_local con este archivo: C:\Temp\contrato.pdf. Analiza obligaciones, riesgos, fechas criticas y recomendaciones.
-```
-
-```text
-Usa analizar_archivo_local con este archivo: C:\Temp\documento-multipagina.tif. Extrae y analiza el contenido completo del documento.
-```
-
-## Troubleshooting
-
-Si Claude no detecta el MCP:
-
-- confirma que `pnpm install` se ejecuto correctamente
-- valida que la ruta en `--dir` exista
-- reinicia Claude Desktop despues de modificar `claude_desktop_config.json`
-- ejecuta `pnpm build` para detectar errores TypeScript
-
-Si `health_check_rag` falla:
-
-- confirma que la API .NET esta corriendo en `http://localhost:5000`
-- revisa si la API expone `GET /health` o al menos `GET /`
-- verifica firewall, puertos y logs de la API
-
-Si una respuesta no se puede parsear como JSON:
-
-- el MCP devuelve el texto crudo
-- revisa el endpoint de la API para confirmar si esta devolviendo `application/json`
-
-Si `analizar_archivo_local` falla:
-
-- confirma que el archivo exista
-- confirma que no sea un directorio
-- si usas `RAG_ALLOWED_FILE_ROOT`, confirma que el archivo este dentro de esa carpeta
-- para archivos grandes, revisa limites de request body en la API .NET
-
-## Seguridad
-
-Este MCP no incluye herramientas para borrar, modificar, mover archivos, ejecutar comandos ni ejecutar SQL.
-
-Recomendaciones para produccion:
-
-- proteger la API con API key o token
-- limitar `RAG_ALLOWED_FILE_ROOT` a una carpeta controlada
-- no exponer variables sensibles en prompts o respuestas
-- ejecutar el MCP y la API local con permisos minimos
-- validar tamano maximo de archivos en la API .NET
-
-## Notas de compatibilidad
-
-- Usa `fetch`, `FormData` y `Blob` nativos de Node 18+
-- Usa transporte MCP por `stdio`
-- Usa `@modelcontextprotocol/sdk` y `zod`
-- El modelo por defecto es `gemma3:1b`
-- Todos los endpoints de archivo unico usan el campo multipart exacto `file`
+| Sintoma | Causa probable | Solucion |
+|---|---|---|
+| Claude Desktop no muestra las herramientas | `pnpm` no esta en el PATH de Claude | Usa `node.exe` con ruta absoluta en el config |
+| `Error: Cannot find module` | No se compilo el proyecto | Ejecuta `pnpm build` |
+| `ECONNREFUSED` en todas las herramientas | La API .NET no esta corriendo | Levanta Docker Compose |
+| Timeout en `analizar_archivo_local` | PDF grande con OCR | Aumenta `RAG_TIMEOUT_MS` a 180000 |
+| Respuesta en ingles | El modelo ignoro la instruccion de idioma | El system prompt ya fuerza espanol - prueba con modelo `gemma3:1b` |

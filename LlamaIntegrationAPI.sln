@@ -1,11 +1,21 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.14.36109.1
+# Visual Studio Version 18
+VisualStudioVersion = 18.5.11716.220 stable
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{E53339B2-1760-4266-BCC7-CA923CBCF16C}") = "docker-compose", "docker-compose.dcproj", "{81DDED9D-158B-E303-5F62-77A2896D2A5A}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LlamaIntegrationAPI", "LlamaIntegrationAPI\LlamaIntegrationAPI.csproj", "{A9E333AE-3C8B-267D-F9F6-61269CA0EC77}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "MCP", "MCP", "{A2A09376-45CC-4CA7-B3A2-4A3A6DCE3053}"
+	ProjectSection(SolutionItems) = preProject
+		cowork-rag-mcp\.env.example = cowork-rag-mcp\.env.example
+		cowork-rag-mcp\.gitignore = cowork-rag-mcp\.gitignore
+		cowork-rag-mcp\package.json = cowork-rag-mcp\package.json
+		cowork-rag-mcp\pnpm-lock.yaml = cowork-rag-mcp\pnpm-lock.yaml
+		cowork-rag-mcp\README.md = cowork-rag-mcp\README.md
+		cowork-rag-mcp\tsconfig.json = cowork-rag-mcp\tsconfig.json
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

@@ -1,3 +1,4 @@
+ï»¿using LlamaIntegrationAPI.Extensions;
 using LlamaIntegrationAPI.Middlewares;
 using LlamaIntegrationAPI.Services;
 using LlamaIntegrationAPI.Services.Implementations;
@@ -25,7 +26,7 @@ builder.Services.Configure<FormOptions>(options =>
     options.ValueCountLimit = int.MaxValue;
 });
 
-// Configuración de Kestrel para aumentar el límite de tamaño de la solicitud
+// Configuracion de Kestrel para aumentar el limite de tamano de la solicitud
 builder.Services.Configure<KestrelServerOptions>(options =>
 {
     options.Limits.MaxRequestBufferSize = 1000 * 1024 * 1024;
@@ -49,6 +50,7 @@ builder.Services.AddScoped<IAnalysisService, AnalysisService>();
 builder.Services.AddScoped<IOrchestratorService, OrchestratorService>();
 
 builder.Services.AddCors(o => o.AddPolicy("AllowAll", b => b.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
+builder.Services.AddAiServices(builder.Configuration);
 
 var app = builder.Build();
 

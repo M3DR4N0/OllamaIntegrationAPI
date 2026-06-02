@@ -9,4 +9,5 @@ namespace LlamaIntegrationAPI.Services.Interfaces;
 public interface IAnalysisService
 {
     Task<AnalysisResult> AnalyzeContractAsync(AnalysisRequest request, CancellationToken ct = default);
+    Task<AnalysisResult> AnalyzeMultipleDocumentsAsync(MultiDocumentAnalysisRequest request, CancellationToken ct = default);
 }

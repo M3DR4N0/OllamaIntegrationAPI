@@ -27,7 +27,13 @@ public class QueryController(
             "[QueryController] POST /api/query — Query: {Query} | Model: {Model} | TopK: {TopK}",
             request.Query, request.Model, request.TopK);
 
-        var result = await orchestrator.HandleAsync(request.Query, request.Model, topK: request.TopK, ct: ct);
+        var result = await orchestrator.HandleAsync(
+            request.Query,
+            request.Model,
+            topK: request.TopK,
+            forceSpanish: request.ForceSpanish,
+            reviewWithAi: request.ReviewWithAi,
+            ct: ct);
 
         return StatusCode((int)result.StatusCode, result);
     }
@@ -60,7 +66,14 @@ public class QueryController(
             "[QueryController] POST /api/query/with-file — File: {FileName} | Size: {Size} bytes | ContentType: {ContentType} | Model: {Model} | TopK: {TopK}",
             file.FileName, file.Length, file.ContentType, request.Model, request.TopK);
 
-        var result = await orchestrator.HandleAsync(request.Query, request.Model, file, request.TopK, ct);
+        var result = await orchestrator.HandleAsync(
+            request.Query,
+            request.Model,
+            file,
+            request.TopK,
+            request.ForceSpanish,
+            request.ReviewWithAi,
+            ct);
 
         return StatusCode((int)result.StatusCode, result);
     }

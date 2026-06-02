@@ -15,6 +15,7 @@ RUN apt-get update \
     && apt-get install -y --allow-unauthenticated \
         libleptonica-dev \
         libtesseract-dev \
+        ghostscript \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ln -s /usr/lib/x86_64-linux-gnu/libdl.so.2 /usr/lib/x86_64-linux-gnu/libdl.so

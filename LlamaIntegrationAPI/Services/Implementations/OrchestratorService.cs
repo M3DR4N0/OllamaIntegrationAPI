@@ -1,6 +1,8 @@
 using LlamaIntegrationAPI.Helpers;
+using LlamaIntegrationAPI.Models.Ai;
 using LlamaIntegrationAPI.Models.Rag;
 using LlamaIntegrationAPI.Models.Response;
+using LlamaIntegrationAPI.Services.Ai;
 using LlamaIntegrationAPI.Services.Interfaces;
 
 namespace LlamaIntegrationAPI.Services.Implementations;
@@ -14,95 +16,96 @@ public class OrchestratorService(
     IVectorStoreService vectorStore,
     ILLMService llm,
     IAnalysisService analysisService,
+    IAiAnswerReviewService answerReviewService,
     ILogger<OrchestratorService> logger) : IOrchestratorService
 {
     private const string LegalCollection = "legal_documents";
 
-    // ── Intent classification keywords ───────────────────────────────
-
     private static readonly string[] ContractKeywords =
-        ["contract", "contrato", "analyze", "analizar", "análisis",
-         "compliance", "cumplimiento", "clause", "cláusula", "review"];
+        ["contract", "contrato", "analyze", "analizar", "analisis",
+         "compliance", "cumplimiento", "clause", "clausula", "review"];
 
     private static readonly string[] LegalKeywords =
-        ["law", "ley", "regulation", "regulación", "normativa",
-         "article", "artículo", "decreto", "resolution", "resolución",
+        ["law", "ley", "regulation", "regulacion", "normativa",
+         "article", "articulo", "decreto", "resolution", "resolucion",
          "legal", "trade", "comercio", "tariff", "arancel",
          "customs", "aduana", "treaty", "tratado", "statutory"];
 
-    private static readonly string[] DataKeywords = [];
-
-    // ── System prompts per intent ────────────────────────────────────
-
     private const string RagSystemPrompt = """
-        Eres un asistente jurídico especializado en derecho internacional del comercio y regulaciones.
+        Eres un asistente juridico especializado en derecho internacional del comercio y regulaciones.
 
         Se te proporcionan extractos relevantes de documentos legales y normativas.
 
         Tu tarea:
-        - Responde la pregunta del usuario basándote ÚNICAMENTE en el contexto legal proporcionado.
-        - Cita artículos, secciones o cláusulas específicas cuando sea posible.
-        - Si el contexto no contiene información suficiente para responder, indícalo explícitamente.
-        - Sé preciso y conciso.
-        - Responde SIEMPRE en español.
+        - Responde la pregunta del usuario basandote UNICAMENTE en el contexto legal proporcionado.
+        - Cita articulos, secciones o clausulas especificas cuando sea posible.
+        - Si el contexto no contiene informacion suficiente para responder, indicalo explicitamente.
+        - Se preciso y conciso.
+        - Responde SIEMPRE en espanol.
         """;
 
     private const string GeneralSystemPrompt = """
-        Eres un asistente experto en análisis de documentos legales y financieros.
+        Eres un asistente experto en analisis de documentos legales y financieros.
 
         Responde la pregunta del usuario de forma clara y concisa.
-        Si no estás seguro, indícalo. No inventes información.
-        Responde SIEMPRE en español.
+        Si no estas seguro, indicalo. No inventes informacion.
+        Responde SIEMPRE en espanol.
         """;
 
-    // ── Public API ───────────────────────────────────────────────────
-
     public async Task<IResponse> HandleAsync(
-        string query, string model, IFormFile? file = null,
-        int topK = 5, CancellationToken ct = default)
+        string query,
+        string model,
+        IFormFile? file = null,
+        int topK = 5,
+        bool forceSpanish = true,
+        bool reviewWithAi = true,
+        CancellationToken ct = default)
     {
         var intent = ClassifyIntent(query, file);
-        logger.LogInformation("Query classified as {Intent}: \"{Query}\"", intent, query);
+        logger.LogInformation(
+            "Query classified as {Intent}: \"{Query}\" | ForceSpanish: {ForceSpanish} | ReviewWithAi: {ReviewWithAi}",
+            intent,
+            query,
+            forceSpanish,
+            reviewWithAi);
 
         return intent switch
         {
-            QueryIntent.ContractAnalysis => await HandleContractAnalysis(query, model, file, topK, ct),
-            QueryIntent.LegalRag         => await HandleLegalRag(query, model, topK, ct),
-            _                            => await HandleGeneral(query, model, topK, ct)
+            QueryIntent.ContractAnalysis => await HandleContractAnalysis(query, model, file, topK, forceSpanish, reviewWithAi, ct),
+            QueryIntent.LegalRag => await HandleLegalRag(query, model, topK, forceSpanish, reviewWithAi, ct),
+            _ => await HandleGeneral(query, model, topK, forceSpanish, reviewWithAi, ct)
         };
     }
-
-    // ── Intent classification (simple rule-based) ────────────────────
 
     private static QueryIntent ClassifyIntent(string query, IFormFile? file)
     {
         var lower = query.ToLowerInvariant();
 
-        // File + contract keywords → contract analysis
         if (file is not null && ContractKeywords.Any(k => lower.Contains(k)))
             return QueryIntent.ContractAnalysis;
 
-        // File without contract keywords → still route to analysis if file present
         if (file is not null)
             return QueryIntent.ContractAnalysis;
 
-        // Legal/regulatory keywords → RAG
         if (LegalKeywords.Any(k => lower.Contains(k)))
             return QueryIntent.LegalRag;
 
-        // Default: try RAG first (legal context may still be useful), fall back to general
         return QueryIntent.General;
     }
 
-    // ── Pipeline handlers ────────────────────────────────────────────
-
     private async Task<IResponse> HandleContractAnalysis(
-        string query, string model, IFormFile? file, int topK, CancellationToken ct)
+        string query,
+        string model,
+        IFormFile? file,
+        int topK,
+        bool forceSpanish,
+        bool reviewWithAi,
+        CancellationToken ct)
     {
         if (file is null)
         {
-            logger.LogWarning("Contract analysis requested but no file provided — falling back to RAG.");
-            return await HandleLegalRag(query, model, topK, ct);
+            logger.LogWarning("Contract analysis requested but no file provided - falling back to RAG.");
+            return await HandleLegalRag(query, model, topK, forceSpanish, reviewWithAi, ct);
         }
 
         var request = new AnalysisRequest
@@ -110,7 +113,9 @@ public class OrchestratorService(
             ContractFile = file,
             Query = query,
             Model = model,
-            TopK = topK
+            TopK = topK,
+            ForceSpanish = forceSpanish,
+            ReviewWithAi = reviewWithAi
         };
 
         var result = await analysisService.AnalyzeContractAsync(request, ct);
@@ -118,54 +123,80 @@ public class OrchestratorService(
     }
 
     private async Task<IResponse> HandleLegalRag(
-        string query, string model, int topK, CancellationToken ct)
+        string query,
+        string model,
+        int topK,
+        bool forceSpanish,
+        bool reviewWithAi,
+        CancellationToken ct)
     {
-        // Retrieve relevant legal chunks from vector store
         var legalChunks = await RetrieveLegalContext(query, topK, ct);
 
         if (legalChunks.Count == 0)
         {
-            logger.LogInformation("No legal context found — answering with general knowledge.");
-            return await HandleGeneral(query, model, topK, ct);
+            logger.LogInformation("No legal context found - answering with general knowledge.");
+            return await HandleGeneral(query, model, topK, forceSpanish, reviewWithAi, ct);
         }
 
-        // Build context-enriched prompt
         var userPrompt = ContextBuilder.Build(query, [], legalChunks);
-
         var response = await llm.GenerateAsync(RagSystemPrompt, userPrompt, model, ct);
+        var reviewedAnswer = await FinalizeAnswerAsync(
+            query,
+            response,
+            "legal_rag_query",
+            forceSpanish,
+            reviewWithAi,
+            "Validate that the final answer uses only the retrieved legal context and follows the requested language and format.",
+            ct);
 
-        return ResponseHandler.Success(new
+        return ResponseHandler.Success(new QueryAnswerResult
         {
-            answer = response,
-            context_used = legalChunks.Count,
-            intent = "legal_rag"
+            Answer = reviewedAnswer.FinalAnswer,
+            OllamaAnswer = reviewedAnswer.OllamaAnswer,
+            GeminiAnswer = reviewedAnswer.GeminiAnswer,
+            ContextUsed = legalChunks.Count,
+            Intent = "legal_rag"
         });
     }
 
     private async Task<IResponse> HandleGeneral(
-        string query, string model, int topK, CancellationToken ct)
+        string query,
+        string model,
+        int topK,
+        bool forceSpanish,
+        bool reviewWithAi,
+        CancellationToken ct)
     {
-        // Try to enrich with legal context if available
         var legalChunks = await RetrieveLegalContext(query, topK, ct);
 
-        string userPrompt = legalChunks.Count > 0
+        var userPrompt = legalChunks.Count > 0
             ? ContextBuilder.Build(query, [], legalChunks)
             : query;
 
         var response = await llm.GenerateAsync(GeneralSystemPrompt, userPrompt, model, ct);
+        var reviewedAnswer = await FinalizeAnswerAsync(
+            query,
+            response,
+            "general_query",
+            forceSpanish,
+            reviewWithAi,
+            "Validate that the response answers the user request clearly and in the expected language.",
+            ct);
 
-        return ResponseHandler.Success(new
+        return ResponseHandler.Success(new QueryAnswerResult
         {
-            answer = response,
-            context_used = legalChunks.Count,
-            intent = "general"
+            Answer = reviewedAnswer.FinalAnswer,
+            OllamaAnswer = reviewedAnswer.OllamaAnswer,
+            GeminiAnswer = reviewedAnswer.GeminiAnswer,
+            ContextUsed = legalChunks.Count,
+            Intent = "general"
         });
     }
 
-    // ── Shared helpers ───────────────────────────────────────────────
-
     private async Task<IReadOnlyList<DocumentChunk>> RetrieveLegalContext(
-        string query, int topK, CancellationToken ct)
+        string query,
+        int topK,
+        CancellationToken ct)
     {
         try
         {
@@ -174,12 +205,37 @@ public class OrchestratorService(
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex, "No legal context available — vector store may be empty.");
+            logger.LogDebug(ex, "No legal context available - vector store may be empty.");
             return [];
         }
     }
 
-    // ── Intent enum ──────────────────────────────────────────────────
+    private async Task<AiAnswerReviewResult> FinalizeAnswerAsync(
+        string query,
+        string rawAnswer,
+        string scenario,
+        bool forceSpanish,
+        bool reviewWithAi,
+        string additionalContext,
+        CancellationToken ct)
+    {
+        if (!reviewWithAi || string.IsNullOrWhiteSpace(rawAnswer))
+        {
+            return new AiAnswerReviewResult
+            {
+                FinalAnswer = rawAnswer,
+                OllamaAnswer = rawAnswer
+            };
+        }
+
+        return await answerReviewService.ReviewAnswerAsync(
+            query,
+            rawAnswer,
+            scenario,
+            forceSpanish,
+            additionalContext,
+            ct);
+    }
 
     private enum QueryIntent
     {

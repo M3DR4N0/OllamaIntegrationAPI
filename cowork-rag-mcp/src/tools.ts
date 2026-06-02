@@ -69,7 +69,7 @@ function buildExecutiveContextQuery(params: {
 export function registerTools(server: McpServer): void {
   server.tool(
     "health_check_rag",
-    "Verifica si la API local RAG esta disponible usando GET /health y, si falla, GET /.",
+    "Verifica si la API RAG local esta disponible. Usala antes de cualquier otra herramienta si hay dudas de conectividad, o cuando el usuario pregunte si el sistema esta activo, si la API responde, o si hay algun problema de conexion.",
     {},
     async () => {
       const result = await healthCheck();
@@ -79,7 +79,7 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     "consultar_base_documental",
-    "Consulta la base documental local mediante POST /api/query.",
+    "Consulta la base documental juridica y legal de la organizacion. USA ESTA HERRAMIENTA SIEMPRE que el usuario pregunte sobre: contratos, leyes, normativas, regulaciones, decretos, resoluciones, aranceles, comercio exterior, obligaciones legales, clausulas, articulos, o cualquier tema juridico o documental. No respondas desde tu conocimiento general en estos temas sin antes consultar esta herramienta.",
     {
       pregunta: z.string().min(1, "pregunta es requerida"),
       topK: z.number().int().positive().default(5),
@@ -98,7 +98,7 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     "generar_informe_contextual",
-    "Consulta la base documental y prepara contexto estructurado para que Claude genere un informe ejecutivo.",
+    "Genera contexto estructurado desde la base documental para elaborar un informe ejecutivo. Usa esta herramienta cuando el usuario pida un informe, resumen ejecutivo, reporte, analisis general, o quiera conocer riesgos, obligaciones o fechas criticas sobre algun tema juridico o contractual.",
     {
       tema: z.string().min(1, "tema es requerido"),
       incluirRiesgos: z.boolean().default(true),
@@ -137,7 +137,7 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     "analizar_contrato_local",
-    "Analiza contratos o documentos legales ya indexados en la base documental mediante POST /api/analysis/contract.",
+    "Analiza contratos o documentos legales consultando la base documental de la organizacion. Usa esta herramienta cuando el usuario quiera analizar, revisar o consultar un contrato o documento legal que ya esta indexado, sin necesidad de subir un archivo. Si el usuario menciona un archivo en disco con ruta, usa analizar_archivo_local en su lugar.",
     {
       pregunta: z.string().min(1, "pregunta es requerida"),
       topK: z.number().int().positive().default(8),
@@ -156,7 +156,7 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     "listar_documentos_locales",
-    "Lista documentos indexados o disponibles mediante GET /api/agent/documents.",
+    "Lista los documentos juridicos y legales disponibles en la base documental. Usa esta herramienta cuando el usuario pregunte que documentos hay disponibles, que esta indexado, que contratos o leyes se pueden consultar.",
     {},
     async () => {
       const result = await listDocuments();
@@ -166,7 +166,7 @@ export function registerTools(server: McpServer): void {
 
   server.tool(
     "analizar_archivo_local",
-    "Envia un archivo local a la API mediante multipart/form-data usando el campo exacto file.",
+    "Envia un archivo local (PDF, Word, imagen, TIFF) a la API para extraer texto con OCR y analizarlo con IA. USA ESTA HERRAMIENTA cuando el usuario proporcione una ruta de archivo en disco (ejemplo: C:\\Temp\\contrato.pdf) y quiera analizarlo, revisarlo o hacerle preguntas. Requiere ruta absoluta al archivo y una pregunta sobre el contenido.",
     {
       filePath: z.string().min(1, "filePath es requerido"),
       pregunta: z.string().min(1, "pregunta es requerida"),
