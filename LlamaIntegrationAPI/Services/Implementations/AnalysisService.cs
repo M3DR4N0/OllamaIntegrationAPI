@@ -85,20 +85,15 @@ public class AnalysisService(
 
         logger.LogInformation("Contract split into {Count} chunks.", contractChunks.Count);
 
-        var relevantContractChunks = await RankChunksByRelevance(
-            contractChunks,
-            request.Query,
-            MaxContractChunks,
-            ct);
-
-        var legalChunks = await RetrieveLegalContext(request.Query, request.TopK, ct);
+        // Select the most relevant chunks using keyword matching only — no embedding, no Qdrant.
+        // Qdrant/embedding is used by other endpoints (query, ingestion), not here.
+        var relevantContractChunks = SelectChunksByKeyword(contractChunks, request.Query, MaxContractChunks);
 
         logger.LogInformation(
-            "Analysis context: {DocChunks} contract chunks + {LegalChunks} legal chunks.",
-            relevantContractChunks.Count,
-            legalChunks.Count);
+            "[AnalysisService] Selected {Selected}/{Total} contract chunks by keyword match.",
+            relevantContractChunks.Count, contractChunks.Count);
 
-        var userPrompt = ContextBuilder.Build(request.Query, relevantContractChunks, legalChunks);
+        var userPrompt = ContextBuilder.Build(request.Query, relevantContractChunks, []);
         var rawResponse = await llm.GenerateAsync(SystemPrompt, userPrompt, request.Model, ct);
         var reviewedAnswer = await FinalizeAnswerAsync(
             request.Query,
@@ -118,14 +113,17 @@ public class AnalysisService(
 
     private async Task<IReadOnlyList<DocumentChunk>> RankChunksByRelevance(
         IReadOnlyList<DocumentChunk> chunks,
-        string query,
+        float[] queryEmbedding,
         int maxChunks,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? queryText = null)
     {
         if (chunks.Count <= maxChunks)
             return chunks;
 
-        var preFiltered = KeywordPreFilter(chunks, query, maxChunks * 3);
+        var preFiltered = queryText is not null
+            ? KeywordPreFilter(chunks, queryText, maxChunks * 3)
+            : chunks;
 
         logger.LogInformation(
             "Ranking {Total} contract chunks - pre-filtered to {PreFiltered}, selecting top {K}.",
@@ -133,7 +131,6 @@ public class AnalysisService(
             preFiltered.Count,
             maxChunks);
 
-        var queryEmbedding = await embedder.GenerateEmbeddingAsync(query, ct);
         var chunkTexts = preFiltered.Select(c => c.Text).ToList();
         var chunkEmbeddings = await embedder.GenerateEmbeddingsAsync(chunkTexts, ct);
 
@@ -145,6 +142,22 @@ public class AnalysisService(
             .Take(maxChunks)
             .Select(x => x.Chunk)
             .ToList();
+    }
+
+    /// <summary>
+    /// Selects the most relevant chunks for the contract analysis pipeline using
+    /// keyword matching only — no embeddings, no Qdrant, no HTTP calls.
+    /// If the document has fewer chunks than <paramref name="max"/>, all are returned.
+    /// </summary>
+    private static IReadOnlyList<DocumentChunk> SelectChunksByKeyword(
+        IReadOnlyList<DocumentChunk> chunks,
+        string query,
+        int max)
+    {
+        if (chunks.Count <= max)
+            return chunks;
+
+        return KeywordPreFilter(chunks, query, max);
     }
 
     private static IReadOnlyList<DocumentChunk> KeywordPreFilter(
@@ -177,13 +190,12 @@ public class AnalysisService(
     }
 
     private async Task<IReadOnlyList<DocumentChunk>> RetrieveLegalContext(
-        string query,
+        float[] queryEmbedding,
         int topK,
         CancellationToken ct)
     {
         try
         {
-            var queryEmbedding = await embedder.GenerateEmbeddingAsync(query, ct);
             return await vectorStore.SearchAsync(LegalCollection, queryEmbedding, topK, ct);
         }
         catch (Exception ex)
@@ -232,13 +244,16 @@ public class AnalysisService(
 
         logger.LogInformation("[MultiDoc] Total de chunks combinados: {Count}.", allChunks.Count);
 
+        var queryEmbedding = await embedder.GenerateEmbeddingAsync(request.Query, ct);
+
         var relevantChunks = await RankChunksByRelevance(
             allChunks,
-            request.Query,
+            queryEmbedding,
             MaxContractChunks,
-            ct);
+            ct,
+            request.Query);
 
-        var legalChunks = await RetrieveLegalContext(request.Query, request.TopK, ct);
+        var legalChunks = await RetrieveLegalContext(queryEmbedding, request.TopK, ct);
         var userPrompt = ContextBuilder.Build(request.Query, relevantChunks, legalChunks);
         var rawResponse = await llm.GenerateAsync(SystemPrompt, userPrompt, request.Model, ct);
         var reviewedAnswer = await FinalizeAnswerAsync(
