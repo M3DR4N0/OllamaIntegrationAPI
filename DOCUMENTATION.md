@@ -164,7 +164,7 @@ LlamaIntegrationAPI/
 └── LlamaIntegrationAPI.csproj
 
 docker-compose.yml                     # API + Ollama + Qdrant
-docker-compose.override.yml            # Overrides de desarrollo
+docker-compose.override.yml            # Override intencionalmente vacio
 docker-compose.dcproj
 .env                                   # Variables sensibles
 .gitignore

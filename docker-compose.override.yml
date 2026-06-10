@@ -1,12 +1,6 @@
-services:
-  llamaintegrationapi:
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Development
-      - ASPNETCORE_HTTP_PORTS=8080
-    ports:
-      - "5000:8080"
-    volumes:
-      - ${APPDATA}/Microsoft/UserSecrets:/home/app/.microsoft/usersecrets:ro
-      - ${APPDATA}/Microsoft/UserSecrets:/root/.microsoft/usersecrets:ro
-      - ${APPDATA}/ASP.NET/Https:/home/app/.aspnet/https:ro
-      - ${APPDATA}/ASP.NET/Https:/root/.aspnet/https:ro
+# Intentionally neutral.
+# Keep `docker compose up` aligned with the base production-oriented setup.
+# Use `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`
+# when you explicitly want the Development environment.
+
+services: {}

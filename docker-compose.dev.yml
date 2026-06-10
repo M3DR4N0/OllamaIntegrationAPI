@@ -1,8 +1,8 @@
-# Development override — use with:
+# Development override - use with:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 #
 # Enables Swagger UI at http://localhost:5000/swagger
-# Does NOT require Visual Studio or ${APPDATA} variables
+# Keeps `docker compose up` in Production by making Development explicit.
 
 services:
   llamaintegrationapi:

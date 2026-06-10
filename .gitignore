@@ -364,3 +364,5 @@ FodyWeavers.xsd
 /models/
 /.env
 /llama-cache
+/LlamaIntegrationAPI/appsettings.Development.json
+/LlamaIntegrationAPI/appsettings.Production.json

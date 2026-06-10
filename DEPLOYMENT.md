@@ -63,11 +63,11 @@ echo "HUGGINGFACE_HUB_TOKEN=tu_token_aqui" > .env
 
 ## 4. Levantar los contenedores
 
-> **Importante:** NO uses `docker compose up` sin `-f`. El archivo `docker-compose.override.yml` usa variables de Visual Studio (`${APPDATA}`) que no existen en una terminal normal y causarán error.
+> `docker compose up` usa la configuración base y deja la API en `Production` por defecto. Usa `docker-compose.dev.yml` solo cuando quieras habilitar `Development` explícitamente.
 
 ```powershell
 # Desde la raíz del repo (donde está docker-compose.yml)
-docker compose -f docker-compose.yml up -d --build
+docker compose up -d --build
 ```
 
 Esto levanta **3 contenedores**:
@@ -383,7 +383,7 @@ docker compose -f docker-compose.yml up -d --build
 docker compose -f docker-compose.yml exec -e ASPNETCORE_ENVIRONMENT=Development llamaintegrationapi dotnet LlamaIntegrationAPI.dll
 ```
 
-> ⚠️ **NO uses `docker compose up` sin `-f`**. El `docker-compose.override.yml` es exclusivo de Visual Studio y usa `${APPDATA}` que no existe en PowerShell.
+> `docker compose up` deja la API en `Production`. Usa `docker-compose.dev.yml` solamente cuando quieras trabajar en `Development`.
 
 ---
 
@@ -547,14 +547,20 @@ Para usar GPU NVIDIA, agrega esto al servicio `ollama` en `docker-compose.yml`:
 
 > Requiere: NVIDIA drivers + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) instalado.
 
-### `docker compose up` falla con error de `${APPDATA}`
+### `docker compose up` usa `Production` por defecto
 
-Estás usando `docker compose up` sin `-f`, lo que carga el `docker-compose.override.yml` automáticamente. Ese archivo es solo para Visual Studio.
+El archivo `docker-compose.override.yml` quedó intencionalmente vacío para que `docker compose up` use solo la configuración base.
 
-**Solución:** Siempre usa el flag `-f`:
+**Producción por defecto:**
 
 ```powershell
-docker compose -f docker-compose.yml up -d --build
+docker compose up -d --build
+```
+
+**Desarrollo explícito:**
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
 ### La ingesta no encuentra texto en el PDF

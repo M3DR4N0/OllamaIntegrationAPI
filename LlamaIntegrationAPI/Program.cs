@@ -47,6 +47,7 @@ builder.Services.AddHttpClient<IEmbeddingService, EmbeddingService>();
 builder.Services.AddHttpClient<ILLMService, LLMService>();
 builder.Services.AddScoped<IRerankingService, RerankingService>();
 builder.Services.AddScoped<IAnalysisService, AnalysisService>();
+builder.Services.AddScoped<IContractMergeService, ContractMergeService>();
 builder.Services.AddScoped<IOrchestratorService, OrchestratorService>();
 
 builder.Services.AddCors(o => o.AddPolicy("AllowAll", b => b.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
