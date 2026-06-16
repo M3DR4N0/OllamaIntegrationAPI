@@ -17,9 +17,11 @@ public class OpenAiCompatibleProvider(
         AiGenerateRequest request,
         CancellationToken cancellationToken)
     {
-        var selectedProvider = TryGetMetadataString(request.Metadata, "provider") ?? ProviderName;
+        var selectedProvider = !string.IsNullOrWhiteSpace(request.Provider)
+            ? request.Provider.Trim()
+            : TryGetMetadataString(request.Metadata, "provider") ?? ProviderName;
         var providerOptions = GetProviderOptions(selectedProvider);
-        var model = providerOptions.Model;
+        var model = ResolveModel(request, selectedProvider);
         var stopwatch = StartTimer();
 
         if (string.IsNullOrWhiteSpace(providerOptions.ApiKey))

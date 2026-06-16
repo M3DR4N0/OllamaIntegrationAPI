@@ -6,6 +6,8 @@ public class AiGenerateRequest
     public string? SystemInstruction { get; set; }
     public string Prompt { get; set; } = string.Empty;
     public string? Context { get; set; }
+    public string? Provider { get; set; }
+    public string? Model { get; set; }
     public string? TargetLanguage { get; set; }
     public bool ForceSpanish { get; set; }
     public double? Temperature { get; set; }

@@ -17,6 +17,7 @@ public class LLMService : ILLMService
     private readonly ILogger<LLMService> _logger;
     private readonly int _maxNumCtx;
     private readonly int _responseBuffer;
+    private readonly int? _defaultMaxNumPredict;
 
     public LLMService(HttpClient httpClient, IConfiguration config, ILogger<LLMService> logger)
     {
@@ -31,11 +32,22 @@ public class LLMService : ILLMService
         _maxNumCtx = int.TryParse(config["LLM_MAX_NUM_CTX"], out var cap) ? cap : 8192;
         // Output-token budget: how many tokens we reserve for the model's reply.
         _responseBuffer = int.TryParse(config["LLM_RESPONSE_BUFFER"], out var buf) ? buf : 512;
+        _defaultMaxNumPredict =
+            int.TryParse(config["LLM_MAX_NUM_PREDICT"], out var maxPredict) && maxPredict > 0
+                ? maxPredict
+                : null;
     }
 
-    public async Task<string> GenerateAsync(string systemPrompt, string userPrompt, string model, CancellationToken ct = default)
+    public async Task<string> GenerateAsync(
+        string systemPrompt,
+        string userPrompt,
+        string model,
+        CancellationToken ct = default,
+        int? maxPredict = null)
     {
         var numCtx = CalculateNumCtx(systemPrompt, userPrompt);
+        var resolvedMaxPredict = ResolveMaxPredict(maxPredict);
+        var options = BuildGenerateOptions(numCtx, resolvedMaxPredict);
 
         var payload = new
         {
@@ -44,19 +56,27 @@ public class LLMService : ILLMService
             prompt = userPrompt,
             stream = false,
             format = (object?)null,
-            options = new { temperature = 0, num_ctx = numCtx }
+            options
         };
 
         var json = JsonSerializer.Serialize(payload);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        _logger.LogInformation("[LLMService] Sending generate request — model: {Model} | num_ctx: {NumCtx}", model, numCtx);
+        _logger.LogInformation(
+            "[LLMService] Sending generate request - model: {Model} | num_ctx: {NumCtx} | max_predict: {MaxPredict}",
+            model,
+            numCtx,
+            resolvedMaxPredict?.ToString() ?? "default");
+
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         using var response = await _httpClient.PostAsync("api/generate", content, ct);
         sw.Stop();
 
-        _logger.LogInformation("[LLMService] Ollama responded in {Ms} ms — status: {Status}", sw.ElapsedMilliseconds, response.StatusCode);
+        _logger.LogInformation(
+            "[LLMService] Ollama responded in {Ms} ms - status: {Status}",
+            sw.ElapsedMilliseconds,
+            response.StatusCode);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -70,11 +90,17 @@ public class LLMService : ILLMService
         return result.Response;
     }
 
-    public async Task<T?> GenerateAsync<T>(string systemPrompt, string userPrompt, string model, CancellationToken ct = default) where T : class
+    public async Task<T?> GenerateAsync<T>(
+        string systemPrompt,
+        string userPrompt,
+        string model,
+        CancellationToken ct = default,
+        int? maxPredict = null) where T : class
     {
         var numCtx = CalculateNumCtx(systemPrompt, userPrompt);
+        var resolvedMaxPredict = ResolveMaxPredict(maxPredict);
+        var options = BuildGenerateOptions(numCtx, resolvedMaxPredict);
 
-        // Request JSON format from the model
         var payload = new
         {
             model,
@@ -82,7 +108,7 @@ public class LLMService : ILLMService
             prompt = userPrompt,
             stream = false,
             format = "json",
-            options = new { temperature = 0, num_ctx = numCtx }
+            options
         };
 
         var json = JsonSerializer.Serialize(payload);
@@ -117,7 +143,7 @@ public class LLMService : ILLMService
         var clamped = Math.Min(needed, _maxNumCtx);
 
         _logger.LogInformation(
-            "[LLMService] numCtx — input: {Input} tokens | buffer: {Buffer} | needed: {Needed} | clamped to: {Clamped} (max: {Max})",
+            "[LLMService] numCtx - input: {Input} tokens | buffer: {Buffer} | needed: {Needed} | clamped to: {Clamped} (max: {Max})",
             inputTokens, _responseBuffer, needed, clamped, _maxNumCtx);
 
         if (needed > _maxNumCtx)
@@ -127,6 +153,28 @@ public class LLMService : ILLMService
                 needed, _maxNumCtx);
 
         return clamped;
+    }
+
+    private int? ResolveMaxPredict(int? maxPredict)
+    {
+        if (maxPredict.HasValue && maxPredict.Value > 0)
+            return maxPredict.Value;
+
+        return _defaultMaxNumPredict;
+    }
+
+    private static Dictionary<string, object> BuildGenerateOptions(int numCtx, int? maxPredict)
+    {
+        var options = new Dictionary<string, object>
+        {
+            ["temperature"] = 0,
+            ["num_ctx"] = numCtx
+        };
+
+        if (maxPredict.HasValue && maxPredict.Value > 0)
+            options["num_predict"] = maxPredict.Value;
+
+        return options;
     }
 
     private sealed class OllamaGenerateResponse

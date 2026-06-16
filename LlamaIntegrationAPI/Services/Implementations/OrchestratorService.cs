@@ -55,6 +55,8 @@ public class OrchestratorService(
     public async Task<IResponse> HandleAsync(
         string query,
         string model,
+        string? externalProvider = null,
+        string? externalModel = null,
         IFormFile? file = null,
         int topK = 5,
         bool forceSpanish = true,
@@ -71,9 +73,9 @@ public class OrchestratorService(
 
         return intent switch
         {
-            QueryIntent.ContractAnalysis => await HandleContractAnalysis(query, model, file, topK, forceSpanish, reviewWithAi, ct),
-            QueryIntent.LegalRag => await HandleLegalRag(query, model, topK, forceSpanish, reviewWithAi, ct),
-            _ => await HandleGeneral(query, model, topK, forceSpanish, reviewWithAi, ct)
+            QueryIntent.ContractAnalysis => await HandleContractAnalysis(query, model, externalProvider, externalModel, file, topK, forceSpanish, reviewWithAi, ct),
+            QueryIntent.LegalRag => await HandleLegalRag(query, model, externalProvider, externalModel, topK, forceSpanish, reviewWithAi, ct),
+            _ => await HandleGeneral(query, model, externalProvider, externalModel, topK, forceSpanish, reviewWithAi, ct)
         };
     }
 
@@ -96,6 +98,8 @@ public class OrchestratorService(
     private async Task<IResponse> HandleContractAnalysis(
         string query,
         string model,
+        string? externalProvider,
+        string? externalModel,
         IFormFile? file,
         int topK,
         bool forceSpanish,
@@ -105,7 +109,7 @@ public class OrchestratorService(
         if (file is null)
         {
             logger.LogWarning("Contract analysis requested but no file provided - falling back to RAG.");
-            return await HandleLegalRag(query, model, topK, forceSpanish, reviewWithAi, ct);
+            return await HandleLegalRag(query, model, externalProvider, externalModel, topK, forceSpanish, reviewWithAi, ct);
         }
 
         var request = new AnalysisRequest
@@ -113,6 +117,8 @@ public class OrchestratorService(
             ContractFile = file,
             Query = query,
             Model = model,
+            ExternalProvider = externalProvider,
+            ExternalModel = externalModel,
             TopK = topK,
             ForceSpanish = forceSpanish,
             ReviewWithAi = reviewWithAi
@@ -125,6 +131,8 @@ public class OrchestratorService(
     private async Task<IResponse> HandleLegalRag(
         string query,
         string model,
+        string? externalProvider,
+        string? externalModel,
         int topK,
         bool forceSpanish,
         bool reviewWithAi,
@@ -135,7 +143,7 @@ public class OrchestratorService(
         if (legalChunks.Count == 0)
         {
             logger.LogInformation("No legal context found - answering with general knowledge.");
-            return await HandleGeneral(query, model, topK, forceSpanish, reviewWithAi, ct);
+            return await HandleGeneral(query, model, externalProvider, externalModel, topK, forceSpanish, reviewWithAi, ct);
         }
 
         var userPrompt = ContextBuilder.Build(query, [], legalChunks);
@@ -146,6 +154,8 @@ public class OrchestratorService(
             "legal_rag_query",
             forceSpanish,
             reviewWithAi,
+            externalProvider,
+            externalModel,
             "Validate that the final answer uses only the retrieved legal context and follows the requested language and format.",
             ct);
 
@@ -162,6 +172,8 @@ public class OrchestratorService(
     private async Task<IResponse> HandleGeneral(
         string query,
         string model,
+        string? externalProvider,
+        string? externalModel,
         int topK,
         bool forceSpanish,
         bool reviewWithAi,
@@ -180,6 +192,8 @@ public class OrchestratorService(
             "general_query",
             forceSpanish,
             reviewWithAi,
+            externalProvider,
+            externalModel,
             "Validate that the response answers the user request clearly and in the expected language.",
             ct);
 
@@ -216,6 +230,8 @@ public class OrchestratorService(
         string scenario,
         bool forceSpanish,
         bool reviewWithAi,
+        string? externalProvider,
+        string? externalModel,
         string additionalContext,
         CancellationToken ct)
     {
@@ -234,6 +250,8 @@ public class OrchestratorService(
             scenario,
             forceSpanish,
             additionalContext,
+            externalProvider,
+            externalModel,
             ct);
     }
 

@@ -1,28 +1,27 @@
-﻿using ImageMagick;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using ImageMagick;
 using LlamaIntegrationAPI.Models;
-using System;
 using System.Text;
 using Tesseract;
 using UglyToad.PdfPig;
-using Xceed.Words.NET;
 
 namespace OllamaIntegrationAPI.Services
 {
     public interface IDocumentProcessor
     {
-        Task<string> ProcessAsync(ExtractFromFileRequest request);   
+        Task<string> ProcessAsync(ExtractFromFileRequest request);
     }
 
-    public class DocumentProcessor(ILogger<DocumentProcessor> logger) : IDocumentProcessor 
+    public class DocumentProcessor(ILogger<DocumentProcessor> logger) : IDocumentProcessor
     {
-        public async Task<string> ProcessAsync(ExtractFromFileRequest request) 
+        public async Task<string> ProcessAsync(ExtractFromFileRequest request)
         {
             string documentText;
 
-            // Usa stream principal si hay file
             await using var stream = request.File?.OpenReadStream();
 
-            // Si hay TIFFs, conviértelos a MemoryStream
             var msList = new List<MemoryStream>();
             try
             {
@@ -62,7 +61,6 @@ namespace OllamaIntegrationAPI.Services
                         }
 
                         documentText = ExtractTextFromImage(stream);
-
                         break;
 
                     default:
@@ -76,7 +74,6 @@ namespace OllamaIntegrationAPI.Services
             }
 
             return documentText;
-
         }
 
         internal static string ExtractTextFromPdf(Stream pdfStream, ILogger? logger = null)
@@ -84,7 +81,6 @@ namespace OllamaIntegrationAPI.Services
             var sb = new StringBuilder();
             TesseractEngine? engine = null;
 
-            // Magick.NET necesita leer el PDF desde bytes (no desde stream que ya usa PdfPig)
             byte[] pdfBytes;
             using (var ms = new MemoryStream())
             {
@@ -105,35 +101,39 @@ namespace OllamaIntegrationAPI.Services
 
                     if (words.Count > 0)
                     {
-                        // Texto digital — extraer directamente
                         double currentLineY = double.MinValue;
                         foreach (var word in words)
                         {
                             if (Math.Abs(word.BoundingBox.Bottom - currentLineY) > 5)
                             {
-                                if (sb.Length > 0) sb.AppendLine();
+                                if (sb.Length > 0)
+                                    sb.AppendLine();
+
                                 currentLineY = word.BoundingBox.Bottom;
                             }
                             else
                             {
                                 sb.Append(' ');
                             }
+
                             sb.Append(word.Text);
                         }
+
                         sb.AppendLine();
                         continue;
                     }
 
-                    // Página sin texto — intentar con imágenes embebidas primero
                     var embeddedImages = page.GetImages().ToList();
                     logger?.LogInformation("[PDF] Página {PageNum} sin texto — {ImageCount} imagen(es) embebida(s).", page.Number, embeddedImages.Count);
 
                     if (embeddedImages.Count > 0)
                     {
-                        // Inicializar Tesseract si no está listo
                         if (engine == null)
                         {
-                            try { engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default); }
+                            try
+                            {
+                                engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
+                            }
                             catch (Exception ex)
                             {
                                 logger?.LogError(ex, "[PDF] No se pudo inicializar Tesseract OCR.");
@@ -164,11 +164,11 @@ namespace OllamaIntegrationAPI.Services
                             }
                         }
 
-                        if (ocrFromEmbedded) continue;
+                        if (ocrFromEmbedded)
+                            continue;
                     }
 
-                    // Fallback: renderizar la página entera con Magick.NET (requiere Ghostscript)
-                    renderPage:
+                renderPage:
                     logger?.LogInformation("[PDF] Página {PageNum} — renderizando con Magick.NET/Ghostscript para OCR.", page.Number);
                     try
                     {
@@ -208,30 +208,41 @@ namespace OllamaIntegrationAPI.Services
         internal static string ExtractTextFromWord(Stream stream)
         {
             var sb = new StringBuilder();
+            stream.Position = 0;
 
-            using var doc = DocX.Load(stream);
+            using var document = WordprocessingDocument.Open(stream, false);
+            if (document.MainDocumentPart is null)
+                return string.Empty;
 
-            foreach (var para in doc.Paragraphs)
-            {
-                if (!string.IsNullOrWhiteSpace(para.Text))
-                    sb.AppendLine(para.Text);
-            }
+            AppendBlockText(sb, document.MainDocumentPart.Document?.Body);
 
-            if (doc.Pictures.Count == 0)
+            foreach (var headerPart in document.MainDocumentPart.HeaderParts)
+                AppendBlockText(sb, headerPart.Header);
+
+            foreach (var footerPart in document.MainDocumentPart.FooterParts)
+                AppendBlockText(sb, footerPart.Footer);
+
+            var imageParts = EnumerateImageParts(document).ToList();
+            if (imageParts.Count == 0)
                 return sb.ToString();
 
-            // Single engine for all pictures
             using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
 
-            foreach (var pic in doc.Pictures)
+            foreach (var imagePart in imageParts)
             {
+                using var imageStream = imagePart.GetStream();
                 using var ms = new MemoryStream();
-                pic.Stream.CopyTo(ms);
+                imageStream.CopyTo(ms);
                 ms.Position = 0;
 
                 using var img = Pix.LoadFromMemory(ms.ToArray());
                 using var page = engine.Process(img);
-                sb.AppendLine(page.GetText());
+                var ocrText = page.GetText();
+
+                if (string.IsNullOrWhiteSpace(ocrText))
+                    continue;
+
+                sb.AppendLine(ocrText.Trim());
                 sb.AppendLine();
             }
 
@@ -240,7 +251,7 @@ namespace OllamaIntegrationAPI.Services
 
         internal static string ExtractTextFromImage(Stream imageStream)
         {
-            StringBuilder sb = new();
+            var sb = new StringBuilder();
 
             using var collection = new MagickImageCollection(imageStream);
             using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
@@ -258,7 +269,7 @@ namespace OllamaIntegrationAPI.Services
 
         internal static string ExtractTextFromImage(List<MemoryStream> imageStreams)
         {
-            StringBuilder sb = new();
+            var sb = new StringBuilder();
 
             using var engine = new TesseractEngine(@"./tessdata", "spa", EngineMode.Default);
 
@@ -274,30 +285,118 @@ namespace OllamaIntegrationAPI.Services
             return sb.ToString();
         }
 
+        private static void AppendBlockText(StringBuilder sb, OpenXmlElement? root)
+        {
+            if (root is null)
+                return;
+
+            foreach (var child in root.ChildElements)
+            {
+                switch (child)
+                {
+                    case Paragraph paragraph:
+                        AppendLineIfPresent(sb, paragraph.InnerText);
+                        break;
+
+                    case Table table:
+                        AppendTableText(sb, table);
+                        break;
+
+                    case SdtBlock sdtBlock:
+                        if (sdtBlock.SdtContentBlock is not null)
+                            AppendBlockText(sb, sdtBlock.SdtContentBlock);
+                        else
+                            AppendBlockText(sb, sdtBlock);
+                        break;
+
+                    default:
+                        if (child.HasChildren)
+                            AppendBlockText(sb, child);
+                        break;
+                }
+            }
+        }
+
+        private static void AppendTableText(StringBuilder sb, Table table)
+        {
+            var appendedAnyRow = false;
+
+            foreach (var row in table.Elements<TableRow>())
+            {
+                var cells = row.Elements<TableCell>()
+                    .Select(cell => NormalizeWhitespace(cell.InnerText))
+                    .Where(text => !string.IsNullOrWhiteSpace(text))
+                    .ToList();
+
+                if (cells.Count == 0)
+                    continue;
+
+                appendedAnyRow = true;
+                sb.AppendLine(string.Join(" | ", cells));
+            }
+
+            if (appendedAnyRow)
+                sb.AppendLine();
+        }
+
+        private static void AppendLineIfPresent(StringBuilder sb, string? text)
+        {
+            var normalized = NormalizeWhitespace(text);
+            if (string.IsNullOrWhiteSpace(normalized))
+                return;
+
+            sb.AppendLine(normalized);
+        }
+
+        private static string NormalizeWhitespace(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return string.Empty;
+
+            return string.Join(" ",
+                text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        }
+
+        private static IEnumerable<ImagePart> EnumerateImageParts(WordprocessingDocument document)
+        {
+            if (document.MainDocumentPart is null)
+                yield break;
+
+            foreach (var imagePart in document.MainDocumentPart.ImageParts)
+                yield return imagePart;
+
+            foreach (var headerPart in document.MainDocumentPart.HeaderParts)
+            {
+                foreach (var imagePart in headerPart.ImageParts)
+                    yield return imagePart;
+            }
+
+            foreach (var footerPart in document.MainDocumentPart.FooterParts)
+            {
+                foreach (var imagePart in footerPart.ImageParts)
+                    yield return imagePart;
+            }
+        }
+
         private static IEnumerable<string> GetUriImages(Stream imageStream)
         {
             using var collection = new MagickImageCollection(imageStream);
 
             foreach (var frame in collection)
             {
-                // Limpieza básica (opcional)
                 frame.ColorSpace = ColorSpace.sRGB;
                 frame.Alpha(AlphaOption.Remove);
 
                 using var mem = new MemoryStream();
-                // PNG para texto (o cambia a Jpeg si prefieres)
                 frame.Format = MagickFormat.Png;
                 frame.Write(mem);
 
                 var b64 = Convert.ToBase64String(mem.ToArray());
-
                 var dataUri = $"data:image/png;base64,{b64}";
 
                 yield return dataUri;
             }
         }
-
-       
 
         private static IEnumerable<string> GetUriImages(List<MemoryStream> imageStreams)
         {
@@ -305,17 +404,14 @@ namespace OllamaIntegrationAPI.Services
 
             foreach (var frame in collection)
             {
-                // Limpieza básica (opcional)
                 frame.ColorSpace = ColorSpace.sRGB;
                 frame.Alpha(AlphaOption.Remove);
 
                 using var mem = new MemoryStream();
-                // PNG para texto (o cambia a Jpeg si prefieres)
                 frame.Format = MagickFormat.Png;
                 frame.Write(mem);
 
                 var b64 = Convert.ToBase64String(mem.ToArray());
-
                 var dataUri = $"data:image/png;base64,{b64}";
 
                 yield return dataUri;

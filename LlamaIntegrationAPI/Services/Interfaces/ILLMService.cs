@@ -6,6 +6,16 @@ namespace LlamaIntegrationAPI.Services.Interfaces;
 /// </summary>
 public interface ILLMService
 {
-    Task<string> GenerateAsync(string systemPrompt, string userPrompt, string model, CancellationToken ct = default);
-    Task<T?> GenerateAsync<T>(string systemPrompt, string userPrompt, string model, CancellationToken ct = default) where T : class;
+    Task<string> GenerateAsync(
+        string systemPrompt,
+        string userPrompt,
+        string model,
+        CancellationToken ct = default,
+        int? maxPredict = null);
+    Task<T?> GenerateAsync<T>(
+        string systemPrompt,
+        string userPrompt,
+        string model,
+        CancellationToken ct = default,
+        int? maxPredict = null) where T : class;
 }

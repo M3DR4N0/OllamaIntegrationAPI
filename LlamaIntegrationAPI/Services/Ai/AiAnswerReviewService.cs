@@ -14,6 +14,8 @@ public class AiAnswerReviewService(
         string scenario,
         bool forceSpanish = true,
         string? additionalContext = null,
+        string? externalProvider = null,
+        string? externalModel = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(draftAnswer))
@@ -33,6 +35,8 @@ public class AiAnswerReviewService(
                     Task = "review_and_finalize_response",
                     Prompt = draftAnswer,
                     Context = BuildContext(userRequest, scenario, additionalContext),
+                    Provider = externalProvider,
+                    Model = externalModel,
                     ForceSpanish = forceSpanish,
                     MaxTokens = ResolveReviewMaxTokens(),
                     SystemInstruction =

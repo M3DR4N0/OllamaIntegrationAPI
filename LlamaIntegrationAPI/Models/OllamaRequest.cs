@@ -11,6 +11,9 @@ namespace LlamaIntegrationAPI.Models
         /// <summary>Multiple files (e.g. multi-page TIFFs). Send as multipart/form-data field named "files".</summary>
         public List<IFormFile>? Files { get; set; }
 
+        public string? ExternalProvider { get; set; }
+        public string? ExternalModel { get; set; }
+
         public new string Suffix { get; set; } = string.Empty;
     }
 }

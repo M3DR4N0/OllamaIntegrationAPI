@@ -20,7 +20,7 @@ public class ClaudeAiProvider(
         CancellationToken cancellationToken)
     {
         var providerOptions = GetProviderOptions(ProviderName);
-        var model = providerOptions.Model;
+        var model = ResolveModel(request, ProviderName);
         var stopwatch = StartTimer();
 
         if (string.IsNullOrWhiteSpace(providerOptions.ApiKey))

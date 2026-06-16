@@ -33,6 +33,14 @@ public abstract class BaseAiProvider(
         return new AiProviderOptions();
     }
 
+    protected string ResolveModel(AiGenerateRequest request, string providerKey)
+    {
+        if (!string.IsNullOrWhiteSpace(request.Model))
+            return request.Model.Trim();
+
+        return GetProviderOptions(providerKey).Model;
+    }
+
     protected CancellationTokenSource CreateTimeoutScope(CancellationToken cancellationToken)
     {
         var timeoutSeconds = CurrentOptions.TimeoutSeconds <= 0 ? 30 : CurrentOptions.TimeoutSeconds;

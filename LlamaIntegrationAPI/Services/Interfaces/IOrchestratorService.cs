@@ -14,6 +14,8 @@ public interface IOrchestratorService
     Task<IResponse> HandleAsync(
         string query,
         string model,
+        string? externalProvider = null,
+        string? externalModel = null,
         IFormFile? file = null,
         int topK = 5,
         bool forceSpanish = true,

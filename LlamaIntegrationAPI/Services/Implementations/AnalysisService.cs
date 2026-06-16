@@ -101,6 +101,8 @@ public class AnalysisService(
             "single_contract_analysis",
             request.ForceSpanish,
             request.ReviewWithAi,
+            request.ExternalProvider,
+            request.ExternalModel,
             ct);
 
         return new AnalysisResult
@@ -262,6 +264,8 @@ public class AnalysisService(
             "multi_document_analysis",
             request.ForceSpanish,
             request.ReviewWithAi,
+            request.ExternalProvider,
+            request.ExternalModel,
             ct);
 
         return new AnalysisResult
@@ -278,6 +282,8 @@ public class AnalysisService(
         string scenario,
         bool forceSpanish,
         bool reviewWithAi,
+        string? externalProvider,
+        string? externalModel,
         CancellationToken ct)
     {
         if (!reviewWithAi)
@@ -295,6 +301,8 @@ public class AnalysisService(
             scenario,
             forceSpanish,
             "Review the contract analysis and ensure the final response matches the requested format and language.",
+            externalProvider,
+            externalModel,
             ct);
     }
 }

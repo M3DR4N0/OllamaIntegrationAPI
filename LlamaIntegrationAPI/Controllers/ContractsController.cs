@@ -29,6 +29,61 @@ public class ContractsController(
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> MergeContracts([FromForm] ContractMergeRequest request, CancellationToken ct)
     {
+        var validationError = ValidateMergeRequest(request);
+        if (validationError is not null)
+            return validationError;
+
+        try
+        {
+            var result = await contractMergeService.MergeContractsAsync(request, ct);
+            return Ok(ResponseHandler.Success(result));
+        }
+        catch (InvalidOperationException ex)
+        {
+            logger.LogWarning(ex, "[ContractsController] Error fusionando contratos.");
+            return UnprocessableEntity(ResponseHandler.Error(ex.Message, System.Net.HttpStatusCode.UnprocessableEntity));
+        }
+    }
+
+    /// <summary>
+    /// Merges two or more contract documents and returns the generated Microsoft Word file directly.
+    /// Send each file using multipart/form-data with the field name <b>files</b>.
+    /// </summary>
+    [HttpPost("merge/docx")]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> MergeContractsAsDocx([FromForm] ContractMergeRequest request, CancellationToken ct)
+    {
+        var validationError = ValidateMergeRequest(request);
+        if (validationError is not null)
+            return validationError;
+
+        try
+        {
+            var result = await contractMergeService.MergeContractsAsync(request, ct);
+
+            if (result.WordDocument is null || result.WordDocument.Length == 0)
+            {
+                logger.LogWarning(
+                    "[ContractsController] El merge finalizo pero no genero el archivo DOCX esperado.");
+                return StatusCode(
+                    StatusCodes.Status500InternalServerError,
+                    ResponseHandler.Error("El merge finalizo pero no se pudo generar el archivo Word."));
+            }
+
+            return File(
+                result.WordDocument,
+                result.WordDocumentContentType ?? "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                result.WordDocumentFileName ?? "merged.docx");
+        }
+        catch (InvalidOperationException ex)
+        {
+            logger.LogWarning(ex, "[ContractsController] Error fusionando contratos.");
+            return UnprocessableEntity(ResponseHandler.Error(ex.Message, System.Net.HttpStatusCode.UnprocessableEntity));
+        }
+    }
+
+    private IActionResult? ValidateMergeRequest(ContractMergeRequest request)
+    {
         if (request.Files is null || request.Files.Count < 2)
         {
             return BadRequest(ResponseHandler.Error(
@@ -64,15 +119,6 @@ public class ContractsController(
             request.BaseDocumentIndex,
             request.Model);
 
-        try
-        {
-            var result = await contractMergeService.MergeContractsAsync(request, ct);
-            return Ok(ResponseHandler.Success(result));
-        }
-        catch (InvalidOperationException ex)
-        {
-            logger.LogWarning(ex, "[ContractsController] Error fusionando contratos.");
-            return UnprocessableEntity(ResponseHandler.Error(ex.Message, System.Net.HttpStatusCode.UnprocessableEntity));
-        }
+        return null;
     }
 }

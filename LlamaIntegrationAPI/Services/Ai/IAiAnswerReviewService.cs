@@ -10,5 +10,7 @@ public interface IAiAnswerReviewService
         string scenario,
         bool forceSpanish = true,
         string? additionalContext = null,
+        string? externalProvider = null,
+        string? externalModel = null,
         CancellationToken cancellationToken = default);
 }

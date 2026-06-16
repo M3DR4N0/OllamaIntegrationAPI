@@ -3,6 +3,7 @@ using LlamaIntegrationAPI.Models;
 using LlamaIntegrationAPI.Models.Rag;
 using LlamaIntegrationAPI.Models.Response;
 using LlamaIntegrationAPI.Services;
+using LlamaIntegrationAPI.Services.Ai;
 using LlamaIntegrationAPI.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using OllamaIntegrationAPI.Services;
@@ -20,7 +21,10 @@ namespace LlamaIntegrationAPI.Controllers
         private readonly IChunkingService _chunker;
         private readonly IEmbeddingService _embedder;
         private readonly IVectorStoreService _vectorStore;
+        private readonly IAiAnswerReviewService _answerReviewService;
         private readonly ILogger<DocumentController> _logger;
+        private readonly int _maxNumCtx;
+        private readonly int _responseBuffer;
 
         private const string LegalCollection = "legal_documents";
         private const int MaxDocChunks = 10;
@@ -32,6 +36,8 @@ namespace LlamaIntegrationAPI.Controllers
             IChunkingService chunker,
             IEmbeddingService embedder,
             IVectorStoreService vectorStore,
+            IAiAnswerReviewService answerReviewService,
+            IConfiguration configuration,
             ILogger<DocumentController> logger)
         {
             _llamaService = llamaService;
@@ -39,7 +45,14 @@ namespace LlamaIntegrationAPI.Controllers
             _chunker = chunker;
             _embedder = embedder;
             _vectorStore = vectorStore;
+            _answerReviewService = answerReviewService;
             _logger = logger;
+            _maxNumCtx = int.TryParse(configuration["LLM_MAX_NUM_CTX"], out var maxNumCtx) && maxNumCtx > 0
+                ? maxNumCtx
+                : 8192;
+            _responseBuffer = int.TryParse(configuration["LLM_RESPONSE_BUFFER"], out var responseBuffer) && responseBuffer > 0
+                ? responseBuffer
+                : 512;
         }
 
         [HttpPost("extract-file")]
@@ -50,13 +63,11 @@ namespace LlamaIntegrationAPI.Controllers
             if (!LlamaRequestValidation.IsValid(request, out var errorMessage))
                 return BadRequest(ResponseHandler.Error(errorMessage));
 
-            // 1. Extract text (reuse existing logic — handles PDF, Word, images, TIFFs)
             var text = await _documentProcessor.ProcessAsync(request).ConfigureAwait(false);
 
             if (string.IsNullOrEmpty(text))
                 return StatusCode(500, ResponseHandler.Error("No se pudo extraer contenido"));
 
-            // 2. Chunk the document instead of sending the full text
             var metadata = new ChunkMetadata
             {
                 DocumentName = request.File?.FileName ?? "uploaded",
@@ -67,45 +78,55 @@ namespace LlamaIntegrationAPI.Controllers
 
             _logger.LogInformation(
                 "Document chunked into {Count} parts for '{File}'.",
-                docChunks.Count, metadata.DocumentName);
+                docChunks.Count,
+                metadata.DocumentName);
 
-            // 3. Keep the original user prompt before we modify it
             var userPrompt = request.Prompt;
-
-            // 4. Select most relevant document chunks (all if small, top-K if large)
             var relevantDocChunks = await RankChunksByRelevance(docChunks, userPrompt, ct);
-
-            // 5. Retrieve legal context from vector store (graceful — no error if empty)
             var legalChunks = await RetrieveLegalContext(userPrompt, ct);
 
-            // 6. Build enriched prompt from relevant chunks only
             request.Prompt = ContextBuilder.Build(userPrompt, relevantDocChunks, legalChunks);
 
             var tokenCount = GptEncoding.GetEncoding("cl100k_base").CountTokens(request.Prompt);
+            var numCtx = Math.Min(tokenCount + _responseBuffer, _maxNumCtx);
+
             request.Stream = false;
             request.Options = new RequestOptions
             {
                 Temperature = 0,
-                NumCtx = tokenCount + 2000
+                NumCtx = numCtx
             };
 
             _logger.LogInformation(
-                "Sending {Tokens} tokens to LLM ({DocChunks} doc chunks + {LegalChunks} legal chunks).",
-                tokenCount, relevantDocChunks.Count, legalChunks.Count);
+                "Sending {Tokens} prompt tokens to LLM with num_ctx {NumCtx} ({DocChunks} doc chunks + {LegalChunks} legal chunks).",
+                tokenCount,
+                numCtx,
+                relevantDocChunks.Count,
+                legalChunks.Count);
 
-            // 7. Send to LLM
             var result = await _llamaService.ExtractInfoAsync(request).ConfigureAwait(false);
 
-            return StatusCode((int)result.StatusCode, result);
+            if (!ShouldReviewPlainTextResponse(request, result))
+                return StatusCode((int)result.StatusCode, result);
+
+            var rawAnswer = result.Data as string ?? string.Empty;
+            var reviewResult = await _answerReviewService.ReviewAnswerAsync(
+                userPrompt,
+                rawAnswer,
+                "document_extract_text_response",
+                forceSpanish: true,
+                additionalContext:
+                    "Validate the answer against the uploaded document and retrieved legal context. " +
+                    "Preserve the requested output format. If the user asked for a document-style response, return clean Markdown only.",
+                externalProvider: request.ExternalProvider,
+                externalModel: request.ExternalModel,
+                cancellationToken: ct);
+
+            return StatusCode(
+                (int)result.StatusCode,
+                ResponseHandler.Success(reviewResult.FinalAnswer, statusCode: result.StatusCode));
         }
 
-        // ── Private helpers ──────────────────────────────────────────
-
-        /// <summary>
-        /// If the document has few chunks, return all of them.
-        /// Otherwise, embed the query and every chunk, then pick the
-        /// <see cref="MaxDocChunks"/> with highest cosine similarity.
-        /// </summary>
         private async Task<IReadOnlyList<DocumentChunk>> RankChunksByRelevance(
             IReadOnlyList<DocumentChunk> chunks,
             string query,
@@ -114,15 +135,19 @@ namespace LlamaIntegrationAPI.Controllers
             if (chunks.Count <= MaxDocChunks)
                 return chunks;
 
+            var preFiltered = KeywordPreFilter(chunks, query, MaxDocChunks * 3);
+
             _logger.LogInformation(
-                "Ranking {Total} chunks — selecting top {K} by relevance.", chunks.Count, MaxDocChunks);
+                "Ranking {Total} chunks - pre-filtered to {PreFiltered}, selecting top {K} by relevance.",
+                chunks.Count,
+                preFiltered.Count,
+                MaxDocChunks);
 
             var queryEmbedding = await _embedder.GenerateEmbeddingAsync(query, ct);
-
-            var chunkTexts = chunks.Select(c => c.Text).ToList();
+            var chunkTexts = preFiltered.Select(c => c.Text).ToList();
             var chunkEmbeddings = await _embedder.GenerateEmbeddingsAsync(chunkTexts, ct);
 
-            return chunks
+            return preFiltered
                 .Select((chunk, i) => (
                     Chunk: chunk,
                     Score: VectorMath.CosineSimilarity(queryEmbedding, chunkEmbeddings[i])))
@@ -132,12 +157,9 @@ namespace LlamaIntegrationAPI.Controllers
                 .ToList();
         }
 
-        /// <summary>
-        /// Tries to retrieve relevant legal/regulatory chunks from Qdrant.
-        /// Returns an empty list if the collection doesn't exist yet or any error occurs.
-        /// </summary>
         private async Task<IReadOnlyList<DocumentChunk>> RetrieveLegalContext(
-            string query, CancellationToken ct)
+            string query,
+            CancellationToken ct)
         {
             try
             {
@@ -146,10 +168,43 @@ namespace LlamaIntegrationAPI.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(
-                    ex, "No legal context available — vector store may be empty.");
+                _logger.LogDebug(ex, "No legal context available - vector store may be empty.");
                 return [];
             }
+        }
+
+        private static IReadOnlyList<DocumentChunk> KeywordPreFilter(
+            IReadOnlyList<DocumentChunk> chunks,
+            string query,
+            int limit)
+        {
+            var tokens = query
+                .ToLowerInvariant()
+                .Split([' ', ',', '.', ';', ':', '?', '!', '\n', '\r', '\t'], StringSplitOptions.RemoveEmptyEntries)
+                .Where(token => token.Length > 3)
+                .ToHashSet();
+
+            if (tokens.Count == 0 || chunks.Count <= limit)
+                return chunks;
+
+            return chunks
+                .Select(chunk => new
+                {
+                    Chunk = chunk,
+                    Score = tokens.Count(token => chunk.Text.Contains(token, StringComparison.OrdinalIgnoreCase))
+                })
+                .OrderByDescending(item => item.Score)
+                .Take(limit)
+                .Select(item => item.Chunk)
+                .ToList();
+        }
+
+        private static bool ShouldReviewPlainTextResponse(ExtractFromFileRequest request, IResponse result)
+        {
+            if (!result.Success || result.Data is not string rawText || string.IsNullOrWhiteSpace(rawText))
+                return false;
+
+            return request.Format is null || string.IsNullOrWhiteSpace(request.Format.ToString());
         }
     }
 }

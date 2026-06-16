@@ -30,6 +30,8 @@ public class QueryController(
         var result = await orchestrator.HandleAsync(
             request.Query,
             request.Model,
+            request.ExternalProvider,
+            request.ExternalModel,
             topK: request.TopK,
             forceSpanish: request.ForceSpanish,
             reviewWithAi: request.ReviewWithAi,
@@ -69,6 +71,8 @@ public class QueryController(
         var result = await orchestrator.HandleAsync(
             request.Query,
             request.Model,
+            request.ExternalProvider,
+            request.ExternalModel,
             file,
             request.TopK,
             request.ForceSpanish,

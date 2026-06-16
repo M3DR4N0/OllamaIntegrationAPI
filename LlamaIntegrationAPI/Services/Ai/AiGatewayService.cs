@@ -28,13 +28,13 @@ public class AiGatewayService(
             return new AiGenerateResponse
             {
                 Success = false,
-                Provider = ResolveProviderName(request.Metadata),
+                Provider = ResolveProviderName(request),
                 Model = string.Empty,
                 Error = "Prompt is required."
             };
         }
 
-        var providerKey = ResolveProviderName(request.Metadata);
+        var providerKey = ResolveProviderName(request);
         var provider = ResolveProvider(providerKey);
 
         if (provider is null)
@@ -56,7 +56,7 @@ public class AiGatewayService(
             "AI gateway dispatching task '{Task}' to provider '{Provider}' using model '{Model}'.",
             effectiveRequest.Task,
             providerKey,
-            provider.ModelName);
+            effectiveRequest.Model ?? provider.ModelName);
 
         return await provider.GenerateAsync(effectiveRequest, cancellationToken).ConfigureAwait(false);
     }
@@ -83,6 +83,10 @@ public class AiGatewayService(
             Task = request.Task,
             Prompt = request.Prompt,
             Context = request.Context,
+            Provider = providerKey,
+            Model = string.IsNullOrWhiteSpace(request.Model)
+                ? providerOptions?.Model
+                : request.Model.Trim(),
             TargetLanguage = targetLanguage,
             ForceSpanish = forceSpanish,
             Temperature = request.Temperature ?? options.Temperature,
@@ -125,9 +129,12 @@ public class AiGatewayService(
         return builder.ToString().Trim();
     }
 
-    private string ResolveProviderName(Dictionary<string, object>? metadata)
+    private string ResolveProviderName(AiGenerateRequest request)
     {
-        var requestedProvider = BaseAiProvider.TryGetMetadataString(metadata, "provider");
+        if (!string.IsNullOrWhiteSpace(request.Provider))
+            return request.Provider.Trim();
+
+        var requestedProvider = BaseAiProvider.TryGetMetadataString(request.Metadata, "provider");
 
         if (!string.IsNullOrWhiteSpace(requestedProvider))
             return requestedProvider.Trim();

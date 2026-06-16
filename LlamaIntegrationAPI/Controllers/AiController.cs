@@ -24,6 +24,8 @@ public class AiController(
                 Task = "quick_ask",
                 Prompt = request.Question,
                 Context = request.Context,
+                Provider = request.Provider,
+                Model = request.Model,
                 ForceSpanish = request.ForceSpanish,
                 SystemInstruction =
                     "Respond to quick user questions. Use the provided context if available. " +
@@ -55,6 +57,8 @@ public class AiController(
             {
                 Task = "normalize_response",
                 Prompt = request.Text,
+                Provider = request.Provider,
+                Model = request.Model,
                 TargetLanguage = request.TargetLanguage,
                 ForceSpanish = string.Equals(request.TargetLanguage, "es", StringComparison.OrdinalIgnoreCase),
                 SystemInstruction = normalizeInstruction

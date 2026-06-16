@@ -18,6 +18,12 @@ public class ContractMergeRequest
     /// <summary>Modelo local de Ollama que generara la propuesta local.</summary>
     public string Model { get; set; } = "gemma3:1b";
 
+    /// <summary>Proveedor externo opcional para revisar o refinar la respuesta.</summary>
+    public string? ExternalProvider { get; set; }
+
+    /// <summary>Modelo externo opcional del proveedor configurado, por ejemplo gemini-2.5-flash.</summary>
+    public string? ExternalModel { get; set; }
+
     /// <summary>Indice del documento base dentro de Files. Por defecto, el primero.</summary>
     public int BaseDocumentIndex { get; set; } = 0;
 
