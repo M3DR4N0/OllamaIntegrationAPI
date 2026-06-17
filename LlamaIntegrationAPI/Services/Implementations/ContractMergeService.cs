@@ -1,4 +1,5 @@
 using System.Text;
+using LlamaIntegrationAPI.Helpers;
 using LlamaIntegrationAPI.Models.Ai;
 using LlamaIntegrationAPI.Models.Contracts;
 using LlamaIntegrationAPI.Models.Rag;
@@ -106,6 +107,42 @@ public class ContractMergeService(
         - Si falta informacion esencial, senalalo solo dentro de una seccion final 'Notas de revision'.
         - Termina SIEMPRE con una linea final exacta: FIN DEL CONTRATO
         - No escribas nada despues de esa linea final.
+        - Responde siempre en espanol.
+        """;
+
+    private const string DocxPlanSystemInstruction = """
+        Actua como abogado redactor y editor estructural de contratos en formato Word.
+
+        Recibiras:
+        - la instruccion del usuario,
+        - un mapa estructural del documento base en formato DOCX,
+        - y uno o mas documentos fuente con clausulas para insertar.
+
+        Tu tarea es decidir que clausulas del documento fuente deben agregarse al documento base y en que punto logico insertarlas,
+        preservando al maximo la estructura y estilo del documento base.
+
+        Debes responder SOLO JSON valido con este esquema:
+        {
+          "summary": "descripcion breve",
+          "operations": [
+            {
+              "targetBlockId": "block_0004 | __before_signatures__ | __document_end__",
+              "placement": "after | before | before_signatures | append_end",
+              "heading": "titulo opcional de la nueva clausula",
+              "content": "texto opcional en varios parrafos",
+              "paragraphs": ["parrafo 1", "parrafo 2"],
+              "reason": "motivo breve"
+            }
+          ]
+        }
+
+        REGLAS:
+        - No reescribas todo el contrato.
+        - Solo crea operaciones para clausulas nuevas o necesarias.
+        - Usa exclusivamente informacion sustentada por los documentos.
+        - Si una clausula ya existe en el documento base, no la dupliques.
+        - Si el lugar mas adecuado es antes de firmas, usa targetBlockId "__before_signatures__".
+        - Si debe ir al final y no hay mejor ancla, usa "__document_end__" con placement "append_end".
         - Responde siempre en espanol.
         """;
 
@@ -221,6 +258,114 @@ public class ContractMergeService(
         };
     }
 
+    public async Task<ContractMergeResult> MergeContractsPreservingOriginalDocxAsync(
+        ContractMergeRequest request,
+        CancellationToken ct = default)
+    {
+        if (request.Files.Count < 2)
+            throw new InvalidOperationException("Se requieren al menos dos archivos para fusionar contratos.");
+
+        if (request.BaseDocumentIndex < 0 || request.BaseDocumentIndex >= request.Files.Count)
+            throw new InvalidOperationException("BaseDocumentIndex esta fuera del rango de archivos recibidos.");
+
+#pragma warning disable CS0618
+        var effectiveQuery = string.IsNullOrWhiteSpace(request.Query)
+            ? (string.IsNullOrWhiteSpace(request.Prompt)
+                ? ContractMergeRequest.DefaultQuery
+                : request.Prompt.Trim())
+            : request.Query.Trim();
+#pragma warning restore CS0618
+
+        var baseFile = request.Files[request.BaseDocumentIndex];
+        if (!DocxOriginalFormatMerger.LooksLikeDocx(baseFile))
+        {
+            throw new InvalidOperationException(
+                "La preservacion de formato requiere que el documento base sea un archivo .docx.");
+        }
+
+        var baseDocxBytes = await ReadAllBytesAsync(baseFile, ct);
+        var baseBlocks = DocxOriginalFormatMerger.Summarize(baseDocxBytes);
+
+        if (baseBlocks.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "No se pudo identificar una estructura util dentro del documento base para insertar clausulas.");
+        }
+
+        var sourceContexts = new List<string>();
+
+        for (var i = 0; i < request.Files.Count; i++)
+        {
+            if (i == request.BaseDocumentIndex)
+                continue;
+
+            var file = request.Files[i];
+            var extractedText = await parser.ExtractTextAsync(file);
+
+            if (string.IsNullOrWhiteSpace(extractedText))
+                continue;
+
+            var excerpt = BuildDocumentExcerpt(
+                extractedText,
+                file.FileName,
+                file.ContentType,
+                effectiveQuery,
+                new ExcerptBudget(18000, 10, 1));
+
+            sourceContexts.Add(
+                $"[Archivo fuente: {file.FileName}]\n{excerpt}");
+        }
+
+        if (sourceContexts.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "No se pudo extraer texto de los documentos fuente con clausulas.");
+        }
+
+        var sourceContext = string.Join("\n\n", sourceContexts);
+        var planResult = await BuildDocxMergePlanAsync(
+            effectiveQuery,
+            request,
+            baseBlocks,
+            sourceContext,
+            ct);
+
+        if (!planResult.Success || planResult.Plan is null)
+        {
+            throw new InvalidOperationException(
+                "No se pudo construir el plan de insercion de clausulas para el documento Word. " +
+                $"Detalle: {planResult.Error ?? "sin detalle"}.");
+        }
+
+        var operations = planResult.Plan.Operations
+            .Where(operation => !string.IsNullOrWhiteSpace(operation.Content) ||
+                                operation.Paragraphs.Count > 0 ||
+                                !string.IsNullOrWhiteSpace(operation.Heading))
+            .ToList();
+
+        var mergedDocx = operations.Count == 0
+            ? baseDocxBytes
+            : DocxOriginalFormatMerger.ApplyOperations(baseDocxBytes, operations);
+
+        var summary = !string.IsNullOrWhiteSpace(planResult.Plan.Summary)
+            ? planResult.Plan.Summary
+            : BuildDocxOperationSummary(operations);
+
+        return new ContractMergeResult
+        {
+            Answer = summary,
+            AnswerFormat = "docx_operation_summary",
+            OllamaAnswer = planResult.Provider == "local" ? planResult.RawText : null,
+            GeminiAnswer = planResult.Provider == "external" ? planResult.RawText : null,
+            GeminiError = planResult.Provider == "external" ? null : planResult.Error,
+            DocumentsProcessed = request.Files.Count,
+            BaseDocumentName = baseFile.FileName,
+            WordDocument = mergedDocx,
+            WordDocumentFileName = BuildMergedFileName(baseFile.FileName),
+            WordDocumentContentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        };
+    }
+
     private async Task<ProviderExecutionResult> GenerateCompleteLocalDraftAsync(
         string userPrompt,
         string model,
@@ -273,6 +418,113 @@ public class ContractMergeService(
         {
             logger.LogWarning(ex, "Local contract merge generation failed.");
             return ProviderExecutionResult.FromError(ex.Message);
+        }
+    }
+
+    private async Task<DocxPlanGenerationResult> BuildDocxMergePlanAsync(
+        string prompt,
+        ContractMergeRequest request,
+        IReadOnlyList<DocxBlockSummary> baseBlocks,
+        string sourceContext,
+        CancellationToken ct)
+    {
+        var planContext = BuildDocxPlanContext(prompt, baseBlocks, sourceContext);
+
+        var externalResult = await TryBuildDocxPlanWithExternalAiAsync(
+            prompt,
+            planContext,
+            request,
+            ct);
+
+        if (externalResult.Success)
+            return externalResult;
+
+        logger.LogWarning(
+            "External DOCX merge plan generation failed. Falling back to local model. Error: {Error}",
+            externalResult.Error);
+
+        return await TryBuildDocxPlanWithLocalModelAsync(
+            prompt,
+            planContext,
+            request.Model,
+            ct);
+    }
+
+    private async Task<DocxPlanGenerationResult> TryBuildDocxPlanWithExternalAiAsync(
+        string prompt,
+        string planContext,
+        ContractMergeRequest request,
+        CancellationToken ct)
+    {
+        try
+        {
+            using var timeoutScope = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutScope.CancelAfter(TimeSpan.FromSeconds(_providerTimeoutSeconds));
+
+            var response = await aiGatewayService.GenerateAsync(
+                new AiGenerateRequest
+                {
+                    Task = "contract_merge_docx_plan",
+                    Prompt = prompt,
+                    Context = planContext,
+                    Provider = request.ExternalProvider,
+                    Model = request.ExternalModel,
+                    ForceSpanish = request.ForceSpanish,
+                    MaxTokens = 4096,
+                    SystemInstruction = DocxPlanSystemInstruction
+                },
+                timeoutScope.Token);
+
+            if (!response.Success || string.IsNullOrWhiteSpace(response.Text))
+            {
+                return DocxPlanGenerationResult.FromError(
+                    "external",
+                    response.Error ?? "El proveedor externo no devolvio un plan util.");
+            }
+
+            var plan = JsonSanitizer.TryExtractJson<DocxMergePlan>(response.Text);
+            if (plan is null)
+            {
+                return DocxPlanGenerationResult.FromError(
+                    "external",
+                    "El proveedor externo devolvio una respuesta que no pudo parsearse como JSON.");
+            }
+
+            return DocxPlanGenerationResult.FromSuccess("external", plan, response.Text);
+        }
+        catch (Exception ex)
+        {
+            return DocxPlanGenerationResult.FromError("external", ex.Message);
+        }
+    }
+
+    private async Task<DocxPlanGenerationResult> TryBuildDocxPlanWithLocalModelAsync(
+        string prompt,
+        string planContext,
+        string model,
+        CancellationToken ct)
+    {
+        try
+        {
+            var plan = await llm.GenerateAsync<DocxMergePlan>(
+                DocxPlanSystemInstruction,
+                BuildDocxPlanUserPrompt(prompt, planContext),
+                model,
+                ct,
+                maxPredict: 2600);
+
+            if (plan is null)
+            {
+                return DocxPlanGenerationResult.FromError(
+                    "local",
+                    "El modelo local no devolvio un JSON valido para el plan de insercion.");
+            }
+
+            return DocxPlanGenerationResult.FromSuccess("local", plan, null);
+        }
+        catch (Exception ex)
+        {
+            return DocxPlanGenerationResult.FromError("local", ex.Message);
         }
     }
 
@@ -640,6 +892,69 @@ public class ContractMergeService(
         return $"{baseName}-merged.docx";
     }
 
+    private static string BuildDocxPlanContext(
+        string prompt,
+        IReadOnlyList<DocxBlockSummary> baseBlocks,
+        string sourceContext)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("=== INSTRUCCION DEL USUARIO ===");
+        sb.AppendLine(prompt);
+        sb.AppendLine();
+        sb.AppendLine("=== BLOQUES DEL DOCUMENTO BASE ===");
+
+        foreach (var block in baseBlocks)
+        {
+            sb.AppendLine($"Id: {block.BlockId}");
+            sb.AppendLine($"Secuencia: {block.Sequence}");
+            sb.AppendLine($"Encabezado: {block.Heading}");
+            sb.AppendLine($"Es bloque de firmas: {block.IsSignatureBlock}");
+            sb.AppendLine("Extracto:");
+            sb.AppendLine(block.Excerpt);
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("=== DOCUMENTOS FUENTE CON CLAUSULAS ===");
+        sb.AppendLine(sourceContext);
+        sb.AppendLine();
+        sb.AppendLine("=== ANCLAS ESPECIALES DISPONIBLES ===");
+        sb.AppendLine("- __before_signatures__");
+        sb.AppendLine("- __document_end__");
+
+        return sb.ToString().Trim();
+    }
+
+    private static string BuildDocxPlanUserPrompt(string prompt, string planContext)
+    {
+        return new StringBuilder()
+            .AppendLine("Genera el plan de insercion de clausulas para el documento base.")
+            .AppendLine()
+            .AppendLine(planContext)
+            .AppendLine()
+            .AppendLine("Devuelve solo JSON valido.")
+            .ToString()
+            .Trim();
+    }
+
+    private static string BuildDocxOperationSummary(IReadOnlyList<DocxMergeOperation> operations)
+    {
+        if (operations.Count == 0)
+            return "No se detectaron nuevas clausulas para insertar; se devolvio el documento base sin modificaciones.";
+
+        var lines = operations.Select((operation, index) =>
+            $"{index + 1}. Insertar '{operation.Heading ?? "clausula sin encabezado"}' en {operation.TargetBlockId ?? operation.Placement ?? "posicion sugerida"}.");
+
+        return "Operaciones aplicadas al documento base:\n" + string.Join("\n", lines);
+    }
+
+    private static async Task<byte[]> ReadAllBytesAsync(IFormFile file, CancellationToken ct)
+    {
+        await using var stream = file.OpenReadStream();
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms, ct);
+        return ms.ToArray();
+    }
+
     private static int ResolvePositiveInt(string? rawValue, int fallback)
     {
         return int.TryParse(rawValue, out var parsed) && parsed > 0
@@ -661,6 +976,23 @@ public class ContractMergeService(
     private sealed record IndexedChunk(DocumentChunk Chunk, int Index);
 
     private sealed record ScoredChunk(DocumentChunk Chunk, int Index, int Score);
+
+    private sealed record DocxPlanGenerationResult(
+        bool Success,
+        string Provider,
+        DocxMergePlan? Plan,
+        string? RawText,
+        string? Error)
+    {
+        public static DocxPlanGenerationResult FromSuccess(
+            string provider,
+            DocxMergePlan plan,
+            string? rawText) => new(true, provider, plan, rawText, null);
+
+        public static DocxPlanGenerationResult FromError(
+            string provider,
+            string error) => new(false, provider, null, null, error);
+    }
 
     private sealed record ProviderExecutionResult(bool Success, string? Text, string? Error)
     {

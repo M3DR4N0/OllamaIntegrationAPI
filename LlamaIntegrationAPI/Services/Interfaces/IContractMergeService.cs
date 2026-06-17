@@ -5,4 +5,5 @@ namespace LlamaIntegrationAPI.Services.Interfaces;
 public interface IContractMergeService
 {
     Task<ContractMergeResult> MergeContractsAsync(ContractMergeRequest request, CancellationToken ct = default);
+    Task<ContractMergeResult> MergeContractsPreservingOriginalDocxAsync(ContractMergeRequest request, CancellationToken ct = default);
 }

@@ -59,7 +59,7 @@ public class ContractsController(
 
         try
         {
-            var result = await contractMergeService.MergeContractsAsync(request, ct);
+            var result = await contractMergeService.MergeContractsPreservingOriginalDocxAsync(request, ct);
 
             if (result.WordDocument is null || result.WordDocument.Length == 0)
             {
