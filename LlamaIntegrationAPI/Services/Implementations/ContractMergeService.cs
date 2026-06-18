@@ -313,7 +313,7 @@ public class ContractMergeService(
                 file.FileName,
                 file.ContentType,
                 effectiveQuery,
-                new ExcerptBudget(18000, 10, 1));
+                new ExcerptBudget(9000, 5, 1));
 
             sourceContexts.Add(
                 $"[Archivo fuente: {file.FileName}]\n{excerpt}");
@@ -346,9 +346,14 @@ public class ContractMergeService(
                                 !string.IsNullOrWhiteSpace(operation.Heading))
             .ToList();
 
-        var mergedDocx = operations.Count == 0
-            ? baseDocxBytes
-            : DocxOriginalFormatMerger.ApplyOperations(baseDocxBytes, operations);
+        if (operations.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "La IA no genero ninguna operacion de insercion para el documento Word. " +
+                "No se devolvera el documento base sin cambios. Revise el prompt, reduzca el tamano del contexto o intente nuevamente.");
+        }
+
+        var mergedDocx = DocxOriginalFormatMerger.ApplyOperations(baseDocxBytes, operations);
 
         var summary = !string.IsNullOrWhiteSpace(planResult.Plan.Summary)
             ? planResult.Plan.Summary

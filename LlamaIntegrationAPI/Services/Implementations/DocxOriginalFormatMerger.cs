@@ -118,8 +118,8 @@ internal static class DocxOriginalFormatMerger
             "\n",
             paragraphs.Select(GetParagraphText).Where(text => !string.IsNullOrWhiteSpace(text)));
 
-        if (excerpt.Length > 1200)
-            excerpt = excerpt[..1200] + "...";
+        if (excerpt.Length > 500)
+            excerpt = excerpt[..500] + "...";
 
         var firstBodyParagraph = paragraphs.FirstOrDefault(p => p != headingParagraph) ?? paragraphs.FirstOrDefault();
 
