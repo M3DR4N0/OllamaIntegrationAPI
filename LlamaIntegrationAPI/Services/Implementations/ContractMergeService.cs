@@ -141,6 +141,9 @@ public class ContractMergeService(
         - Solo crea operaciones para clausulas nuevas o necesarias.
         - Usa exclusivamente informacion sustentada por los documentos.
         - Si una clausula ya existe en el documento base, no la dupliques.
+        - Si vas a insertar un nuevo PARRAFO, NUMERAL, INCISO o LITERAL dentro de un ARTICULO o CLAUSULA ya existente, usa el targetBlockId de ese articulo o clausula y placement "before". El sistema lo insertara inmediatamente despues del encabezado del bloque y antes del contenido existente.
+        - En esos casos, coloca el rotulo corto en "heading" (por ejemplo: "PARRAFO I: Cobertura...") y deja el texto explicativo dentro de "paragraphs" o "content".
+        - No coloques el contenido antes del "heading" ni repitas el "heading" dentro de "paragraphs".
         - Si el lugar mas adecuado es antes de firmas, usa targetBlockId "__before_signatures__".
         - Si debe ir al final y no hay mejor ancla, usa "__document_end__" con placement "append_end".
         - Responde siempre en espanol.

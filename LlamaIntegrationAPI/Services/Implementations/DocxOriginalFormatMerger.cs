@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -10,6 +9,14 @@ internal static class DocxOriginalFormatMerger
 {
     private static readonly Regex HeadingPattern = new(
         @"^(ART[ÍI]CULO|CL[ÁA]USULA|SECCI[ÓO]N|CAP[ÍI]TULO|PAR[ÁA]GRAFO)\b|^(?:\d+\.|[IVXLC]+\.)\s",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex MajorSectionHeadingPattern = new(
+        @"^(ART[ÍI]CULO|CL[ÁA]USULA|SECCI[ÓO]N|CAP[ÍI]TULO)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex SubClauseHeadingPattern = new(
+        @"^(PAR[ÁA]GRAFO|NUMERAL|INCISO|LITERAL)\b|^(?:\d+\.|[IVXLC]+\.)\s",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex SignaturePattern = new(
@@ -48,9 +55,7 @@ internal static class DocxOriginalFormatMerger
             var insertionAnchors = new Dictionary<string, OpenXmlElement>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var operation in operations)
-            {
                 ApplyOperation(body, blocks, operation, insertionAnchors);
-            }
 
             document.MainDocumentPart?.Document?.Save();
         }
@@ -151,24 +156,28 @@ internal static class DocxOriginalFormatMerger
         DocxMergeOperation operation,
         IDictionary<string, OpenXmlElement> insertionAnchors)
     {
-        var paragraphs = NormalizeOperationParagraphs(operation);
-        if (paragraphs.Count == 0)
+        var normalizedContent = NormalizeOperationContent(operation);
+        if (normalizedContent.Paragraphs.Count == 0 && string.IsNullOrWhiteSpace(normalizedContent.Heading))
             return;
 
         var targetBlock = ResolveTargetBlock(blocks, operation.TargetBlockId);
-        var headingTemplate = targetBlock?.HeadingParagraph
+        var targetHeadingTemplate = targetBlock?.HeadingParagraph
             ?? blocks.FirstOrDefault(block => block.HeadingParagraph is not null)?.HeadingParagraph
             ?? body.Elements<Paragraph>().FirstOrDefault();
         var bodyTemplate = targetBlock?.FirstBodyParagraph
             ?? blocks.FirstOrDefault(block => block.FirstBodyParagraph is not null)?.FirstBodyParagraph
             ?? body.Elements<Paragraph>().FirstOrDefault();
+        var headingTemplate = ShouldUseBodyTemplateForHeading(targetBlock, normalizedContent.Heading)
+            ? bodyTemplate
+            : targetHeadingTemplate;
 
         var insertedParagraphs = new List<Paragraph>();
 
-        if (!string.IsNullOrWhiteSpace(operation.Heading))
-            insertedParagraphs.Add(CreateParagraphFromTemplate(headingTemplate, operation.Heading));
+        if (!string.IsNullOrWhiteSpace(normalizedContent.Heading))
+            insertedParagraphs.Add(CreateParagraphFromTemplate(headingTemplate, normalizedContent.Heading));
 
-        insertedParagraphs.AddRange(paragraphs.Select(paragraph => CreateParagraphFromTemplate(bodyTemplate, paragraph)));
+        insertedParagraphs.AddRange(
+            normalizedContent.Paragraphs.Select(paragraph => CreateParagraphFromTemplate(bodyTemplate, paragraph)));
 
         var placement = (operation.Placement ?? "after").Trim().ToLowerInvariant();
 
@@ -197,28 +206,78 @@ internal static class DocxOriginalFormatMerger
             return;
         }
 
-        if (placement == "before")
+        if (ShouldInsertInsideTargetAtStart(targetBlock, placement, normalizedContent.Heading))
         {
-            InsertBefore(targetBlock.StartParagraph, insertedParagraphs);
+            var targetKey = $"{targetBlock.BlockId}::inside_start";
+            var anchor = insertionAnchors.TryGetValue(targetKey, out var knownAnchor)
+                ? knownAnchor
+                : targetBlock.HeadingParagraph ?? targetBlock.StartParagraph;
+
+            InsertAfter(anchor, insertedParagraphs);
+            insertionAnchors[targetKey] = insertedParagraphs.Last();
             return;
         }
 
-        var targetKey = targetBlock.BlockId;
-        var anchor = insertionAnchors.TryGetValue(targetKey, out var knownAnchor)
-            ? knownAnchor
+        if (placement == "before")
+        {
+            var beforeKey = $"{targetBlock.BlockId}::before";
+            var anchor = insertionAnchors.TryGetValue(beforeKey, out var knownBeforeAnchor)
+                ? knownBeforeAnchor
+                : targetBlock.StartParagraph;
+
+            InsertBefore(anchor, insertedParagraphs);
+            insertionAnchors[beforeKey] = insertedParagraphs.First();
+            return;
+        }
+
+        var targetKeyAfter = targetBlock.BlockId;
+        var afterAnchor = insertionAnchors.TryGetValue(targetKeyAfter, out var knownAfterAnchor)
+            ? knownAfterAnchor
             : targetBlock.EndParagraph;
 
-        InsertAfter(anchor, insertedParagraphs);
-        insertionAnchors[targetKey] = insertedParagraphs.Last();
+        InsertAfter(afterAnchor, insertedParagraphs);
+        insertionAnchors[targetKeyAfter] = insertedParagraphs.Last();
     }
 
-    private static List<string> NormalizeOperationParagraphs(DocxMergeOperation operation)
+    private static NormalizedOperationContent NormalizeOperationContent(DocxMergeOperation operation)
+    {
+        var paragraphs = ExtractOperationParagraphs(operation);
+        var heading = NormalizeOperationText(operation.Heading);
+
+        if (string.IsNullOrWhiteSpace(heading) && paragraphs.Count > 1)
+        {
+            if (LooksLikeStandaloneInsertedHeading(paragraphs[0]))
+            {
+                heading = paragraphs[0];
+                paragraphs.RemoveAt(0);
+            }
+            else if (LooksLikeStandaloneInsertedHeading(paragraphs[^1]))
+            {
+                heading = paragraphs[^1];
+                paragraphs.RemoveAt(paragraphs.Count - 1);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(heading))
+        {
+            paragraphs = paragraphs
+                .Where(paragraph => !string.Equals(
+                    NormalizeOperationText(paragraph),
+                    heading,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        return new NormalizedOperationContent(heading, paragraphs);
+    }
+
+    private static List<string> ExtractOperationParagraphs(DocxMergeOperation operation)
     {
         if (operation.Paragraphs is { Count: > 0 })
         {
             return operation.Paragraphs
                 .Where(paragraph => !string.IsNullOrWhiteSpace(paragraph))
-                .Select(paragraph => paragraph.Trim())
+                .Select(NormalizeOperationText)
                 .ToList();
         }
 
@@ -227,9 +286,57 @@ internal static class DocxOriginalFormatMerger
 
         return operation.Content
             .Split(["\r\n\r\n", "\n\n"], StringSplitOptions.RemoveEmptyEntries)
-            .Select(paragraph => paragraph.Trim())
+            .Select(NormalizeOperationText)
             .Where(paragraph => !string.IsNullOrWhiteSpace(paragraph))
             .ToList();
+    }
+
+    private static bool ShouldInsertInsideTargetAtStart(
+        DocxBlock? targetBlock,
+        string placement,
+        string? heading)
+    {
+        if (targetBlock?.HeadingParagraph is null || string.IsNullOrWhiteSpace(heading))
+            return false;
+
+        if (!string.Equals(placement, "before", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(placement, "inside_start", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(placement, "inside-start", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(placement, "prepend", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return IsMajorSectionHeadingText(targetBlock.HeadingText) && IsSubClauseHeadingText(heading);
+    }
+
+    private static bool ShouldUseBodyTemplateForHeading(DocxBlock? targetBlock, string? heading)
+    {
+        return targetBlock is not null &&
+               !string.IsNullOrWhiteSpace(heading) &&
+               IsMajorSectionHeadingText(targetBlock.HeadingText) &&
+               IsSubClauseHeadingText(heading);
+    }
+
+    private static bool LooksLikeStandaloneInsertedHeading(string text)
+    {
+        var normalized = NormalizeOperationText(text);
+        return normalized.Length <= 220 && HeadingPattern.IsMatch(normalized);
+    }
+
+    private static bool IsMajorSectionHeadingText(string text)
+    {
+        return MajorSectionHeadingPattern.IsMatch(NormalizeOperationText(text));
+    }
+
+    private static bool IsSubClauseHeadingText(string text)
+    {
+        return SubClauseHeadingPattern.IsMatch(NormalizeOperationText(text));
+    }
+
+    private static string NormalizeOperationText(string? text)
+    {
+        return text?.Trim() ?? string.Empty;
     }
 
     private static DocxBlock? ResolveTargetBlock(IReadOnlyList<DocxBlock> blocks, string? targetBlockId)
@@ -337,3 +444,7 @@ internal sealed record DocxBlock(
     string HeadingText,
     string Excerpt,
     bool IsSignatureBlock);
+
+internal sealed record NormalizedOperationContent(
+    string? Heading,
+    List<string> Paragraphs);
