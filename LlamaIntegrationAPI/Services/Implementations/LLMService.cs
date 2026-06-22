@@ -45,8 +45,8 @@ public class LLMService : ILLMService
         CancellationToken ct = default,
         int? maxPredict = null)
     {
-        var numCtx = CalculateNumCtx(systemPrompt, userPrompt);
         var resolvedMaxPredict = ResolveMaxPredict(maxPredict);
+        var numCtx = CalculateNumCtx(systemPrompt, userPrompt, resolvedMaxPredict);
         var options = BuildGenerateOptions(numCtx, resolvedMaxPredict);
 
         var payload = new
@@ -97,8 +97,8 @@ public class LLMService : ILLMService
         CancellationToken ct = default,
         int? maxPredict = null) where T : class
     {
-        var numCtx = CalculateNumCtx(systemPrompt, userPrompt);
         var resolvedMaxPredict = ResolveMaxPredict(maxPredict);
+        var numCtx = CalculateNumCtx(systemPrompt, userPrompt, resolvedMaxPredict);
         var options = BuildGenerateOptions(numCtx, resolvedMaxPredict);
 
         var payload = new
@@ -131,25 +131,28 @@ public class LLMService : ILLMService
     }
 
     /// <summary>
-    /// Counts tokens in the combined prompt, adds a response buffer, then clamps to
+    /// Counts tokens in the combined prompt, adds a dynamic output buffer, then clamps to
     /// <c>LLM_MAX_NUM_CTX</c> (default 8192). A stable <c>num_ctx</c> prevents Ollama
     /// from evicting and reloading the model's KV-cache on every request.
     /// </summary>
-    private int CalculateNumCtx(string systemPrompt, string userPrompt)
+    private int CalculateNumCtx(string systemPrompt, string userPrompt, int? resolvedMaxPredict)
     {
         var encoding = GptEncoding.GetEncoding("cl100k_base");
         var inputTokens = encoding.CountTokens(systemPrompt) + encoding.CountTokens(userPrompt);
-        var needed = inputTokens + _responseBuffer;
+        var outputBudget = resolvedMaxPredict.HasValue && resolvedMaxPredict.Value > 0
+            ? Math.Max(_responseBuffer, resolvedMaxPredict.Value)
+            : _responseBuffer;
+        var needed = inputTokens + outputBudget;
         var clamped = Math.Min(needed, _maxNumCtx);
 
         _logger.LogInformation(
-            "[LLMService] numCtx - input: {Input} tokens | buffer: {Buffer} | needed: {Needed} | clamped to: {Clamped} (max: {Max})",
-            inputTokens, _responseBuffer, needed, clamped, _maxNumCtx);
+            "[LLMService] numCtx - input: {Input} tokens | output_budget: {OutputBudget} | needed: {Needed} | clamped to: {Clamped} (max: {Max})",
+            inputTokens, outputBudget, needed, clamped, _maxNumCtx);
 
         if (needed > _maxNumCtx)
             _logger.LogWarning(
-                "[LLMService] Prompt ({Needed} tokens) exceeds LLM_MAX_NUM_CTX ({Max}). " +
-                "The context will be TRUNCATED. Reduce MaxContractChunks or increase LLM_MAX_NUM_CTX.",
+                "[LLMService] Prompt plus output budget ({Needed} tokens) exceeds LLM_MAX_NUM_CTX ({Max}). " +
+                "The context will be TRUNCATED. Reduce prompt size, reduce maxPredict, or increase LLM_MAX_NUM_CTX.",
                 needed, _maxNumCtx);
 
         return clamped;
