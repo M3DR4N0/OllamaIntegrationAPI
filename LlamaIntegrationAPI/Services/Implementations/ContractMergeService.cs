@@ -703,7 +703,7 @@ public class ContractMergeService(
                 BuildDocxPlanUserPrompt(prompt, planContext),
                 model,
                 ct,
-                maxPredict: 2600);
+                maxPredict: _localMaxPredict);
 
             var plan = JsonSanitizer.TryExtractJson<DocxMergePlan>(rawText);
 
@@ -1127,6 +1127,10 @@ public class ContractMergeService(
         return new StringBuilder()
             .AppendLine("Genera el plan de insercion de clausulas para el documento base.")
             .AppendLine()
+            .AppendLine("INSTRUCCION ORIGINAL DEL USUARIO")
+            .AppendLine(prompt)
+            .AppendLine()
+            .AppendLine("CONTEXTO DOCUMENTAL")
             .AppendLine(planContext)
             .AppendLine()
             .AppendLine("Devuelve solo JSON valido.")

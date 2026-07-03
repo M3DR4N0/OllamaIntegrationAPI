@@ -21,7 +21,7 @@ public class QueryController(
             return BadRequest(ResponseHandler.Error("A query is required."));
 
         if (string.IsNullOrWhiteSpace(request.Model))
-            request.Model = "gemma3:1b";
+            request.Model = "gemma3:4b";
 
         logger.LogInformation(
             "[QueryController] POST /api/query — Query: {Query} | Model: {Model} | TopK: {TopK}",
@@ -62,7 +62,7 @@ public class QueryController(
             return BadRequest(ResponseHandler.Error("A query is required."));
 
         if (string.IsNullOrWhiteSpace(request.Model))
-            request.Model = "gemma3:1b";
+            request.Model = "gemma3:4b";
 
         logger.LogInformation(
             "[QueryController] POST /api/query/with-file — File: {FileName} | Size: {Size} bytes | ContentType: {ContentType} | Model: {Model} | TopK: {TopK}",

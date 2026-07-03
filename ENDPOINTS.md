@@ -164,6 +164,35 @@ La respuesta depende del prompt enviado. Para extracción de metadata estructura
 
 ---
 
+## 5. `POST /api/document/to-base64`
+
+Convierte cualquier documento recibido por `multipart/form-data` a Base64 sin usar IA.
+
+### Request
+```http
+POST /api/document/to-base64
+Content-Type: multipart/form-data
+```
+
+| Campo  | Tipo        | Requerido | DescripciÃ³n                                  |
+|--------|-------------|-----------|-----------------------------------------------|
+| `file` | `IFormFile` | âœ…        | Documento a convertir (PDF, Word, imagen, etc.) |
+
+### Response
+```json
+{
+  "fileName": "documento1.pdf",
+  "base64": "JVBERi0xLjQKJ..."
+}
+```
+
+| Campo      | DescripciÃ³n                                       |
+|------------|---------------------------------------------------|
+| `fileName` | Nombre original del archivo incluyendo extensiÃ³n |
+| `base64`   | Contenido completo del archivo codificado en Base64 |
+
+---
+
 ## Resumen comparativo
 
 | Endpoint                        | Requiere archivo | Persiste en BD vectorial | Consulta BD vectorial | Respuesta estructurada fija |

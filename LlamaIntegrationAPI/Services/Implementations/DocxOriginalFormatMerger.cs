@@ -611,8 +611,23 @@ internal static class DocxOriginalFormatMerger
 
     private static void InsertBefore(OpenXmlElement anchor, IReadOnlyList<Paragraph> paragraphs)
     {
+        anchor = MoveAnchorBeforeLeadingSpacerParagraphs(anchor);
+
         foreach (var paragraph in paragraphs)
             anchor.InsertBeforeSelf(paragraph);
+    }
+
+    private static OpenXmlElement MoveAnchorBeforeLeadingSpacerParagraphs(OpenXmlElement anchor)
+    {
+        var effectiveAnchor = anchor;
+
+        while (effectiveAnchor.PreviousSibling() is Paragraph previousParagraph &&
+               string.IsNullOrWhiteSpace(GetParagraphText(previousParagraph)))
+        {
+            effectiveAnchor = previousParagraph;
+        }
+
+        return effectiveAnchor;
     }
 
     private static Paragraph CreateParagraphFromTemplate(

@@ -16,7 +16,7 @@ public class ContractMergeRequest
     public string? Prompt { get; set; }
 
     /// <summary>Modelo local de Ollama que generara la propuesta local.</summary>
-    public string Model { get; set; } = "gemma3:1b";
+    public string Model { get; set; } = "gemma3:4b";
 
     /// <summary>Proveedor externo opcional para revisar o refinar la respuesta.</summary>
     public string? ExternalProvider { get; set; }

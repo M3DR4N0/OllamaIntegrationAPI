@@ -23,7 +23,7 @@ public class AnalysisController(
     ///     curl -X POST "http://localhost:5000/api/analysis/contract" \
     ///       -F "file=@C:\Temp\contrato.pdf" \
     ///       -F "query=Analiza las obligaciones principales del contrato" \
-    ///       -F "model=gemma3:1b" \
+    ///       -F "model=gemma3:4b" \
     ///       -F "topK=8"
     ///
     /// Example PowerShell:
@@ -31,7 +31,7 @@ public class AnalysisController(
     ///     $form = @{
     ///         file  = Get-Item "C:\Temp\contrato.pdf"
     ///         query = "Analiza las obligaciones principales del contrato"
-    ///         model = "gemma3:1b"
+    ///         model = "gemma3:4b"
     ///         topK  = "8"
     ///     }
     ///     Invoke-RestMethod -Uri "http://localhost:5000/api/analysis/contract" -Method Post -Form $form
@@ -62,7 +62,7 @@ public class AnalysisController(
             return BadRequest(ResponseHandler.Error("A query is required."));
 
         if (string.IsNullOrWhiteSpace(request.Model))
-            request.Model = "gemma3:1b";
+            request.Model = "gemma3:4b";
 
         logger.LogInformation(
             "[AnalysisController] POST /api/analysis/contract — File: {FileName} | Size: {Size} bytes | ContentType: {ContentType} | Model: {Model} | TopK: {TopK}",
@@ -92,7 +92,7 @@ public class AnalysisController(
     ///       -F "files=@C:\Temp\contrato1.pdf" \
     ///       -F "files=@C:\Temp\contrato2.pdf" \
     ///       -F "query=Compara las obligaciones de ambos contratos" \
-    ///       -F "model=gemma3:1b" \
+    ///       -F "model=gemma3:4b" \
     ///       -F "topK=8"
     /// </remarks>
     [HttpPost("multi")]
@@ -111,7 +111,7 @@ public class AnalysisController(
             return BadRequest(ResponseHandler.Error("La consulta (query) es requerida."));
 
         if (string.IsNullOrWhiteSpace(request.Model))
-            request.Model = "gemma3:1b";
+            request.Model = "gemma3:4b";
 
         logger.LogInformation(
             "[AnalysisController] POST /api/analysis/multi — {Count} archivo(s) | Model: {Model} | TopK: {TopK}",

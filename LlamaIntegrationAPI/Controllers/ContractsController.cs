@@ -23,7 +23,7 @@ public class ContractsController(
     ///       -F "files=@C:\Temp\borrador-base.pdf" \
     ///       -F "files=@C:\Temp\clausulas-adicionales.pdf" \
     ///       -F "query=Actua como un Abogado Experto en Redaccion de Contratos y Revisor Legal. Tu objetivo es integrar clausulas especificas de manera organica dentro de un borrador de contrato existente." \
-    ///       -F "model=gemma3:1b"
+    ///       -F "model=gemma3:4b"
     /// </remarks>
     [HttpPost("merge")]
     [Consumes("multipart/form-data")]
@@ -108,7 +108,7 @@ public class ContractsController(
             return BadRequest(ResponseHandler.Error("La consulta (query) es requerida."));
 
         if (string.IsNullOrWhiteSpace(request.Model))
-            request.Model = "gemma3:1b";
+            request.Model = "gemma3:4b";
 
         if (string.IsNullOrWhiteSpace(request.Query))
             request.Query = ContractMergeRequest.DefaultQuery;

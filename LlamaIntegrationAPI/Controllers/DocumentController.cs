@@ -1,4 +1,5 @@
 using LlamaIntegrationAPI.Helpers;
+using LlamaIntegrationAPI.Models.Documents;
 using LlamaIntegrationAPI.Models;
 using LlamaIntegrationAPI.Models.Rag;
 using LlamaIntegrationAPI.Models.Response;
@@ -53,6 +54,32 @@ namespace LlamaIntegrationAPI.Controllers
             _responseBuffer = int.TryParse(configuration["LLM_RESPONSE_BUFFER"], out var responseBuffer) && responseBuffer > 0
                 ? responseBuffer
                 : 512;
+        }
+
+        [HttpPost("to-base64")]
+        [Consumes("multipart/form-data")]
+        public async Task<IActionResult> ConvertToBase64(
+            [FromForm] DocumentToBase64Request request,
+            CancellationToken ct)
+        {
+            if (request.File is null)
+                return BadRequest(ResponseHandler.Error(
+                    "No se recibio ningun archivo. Envie el archivo usando el campo multipart/form-data llamado 'file'."));
+
+            if (request.File.Length == 0)
+                return BadRequest(ResponseHandler.Error("El archivo recibido esta vacio."));
+
+            await using var stream = request.File.OpenReadStream();
+            await using var memoryStream = new MemoryStream();
+            await stream.CopyToAsync(memoryStream, ct);
+
+            var response = new DocumentToBase64Response
+            {
+                FileName = request.File.FileName,
+                Base64 = Convert.ToBase64String(memoryStream.ToArray())
+            };
+
+            return Ok(response);
         }
 
         [HttpPost("extract-file")]

@@ -15,7 +15,7 @@ public class AnalysisRequest
     public IFormFile? ResolvedFile => File ?? ContractFile;
 
     public string Query { get; set; } = string.Empty;
-    public string Model { get; set; } = "gemma3:1b"; 
+    public string Model { get; set; } = "gemma3:4b"; 
     public string? ExternalProvider { get; set; }
     public string? ExternalModel { get; set; }
     public int TopK { get; set; } = 5;
