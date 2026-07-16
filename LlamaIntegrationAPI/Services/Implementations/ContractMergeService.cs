@@ -63,7 +63,7 @@ public class ContractMergeService(
     private readonly int _providerTimeoutSeconds =
         int.TryParse(configuration["ContractMerge:ProviderTimeoutSeconds"], out var timeoutSeconds) && timeoutSeconds > 0
             ? timeoutSeconds
-            : 60;
+            : 10800;
 
     private const string LocalSystemPrompt = """
         Eres un abogado experto en redaccion de contratos y revision legal.

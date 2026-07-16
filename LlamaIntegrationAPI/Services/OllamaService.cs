@@ -26,7 +26,7 @@ namespace LlamaIntegrationAPI.Services
             _httpClient = httpClient;
             _logger = logger;
             _httpClient.BaseAddress = new Uri(host);
-            _httpClient.Timeout = TimeSpan.FromHours(1);
+            _httpClient.Timeout = TimeSpan.FromHours(3);
         }
 
         public async Task<IResponse> ExtractInfoAsync(GenerateRequest request)

@@ -5,6 +5,7 @@ using ImageMagick;
 using LlamaIntegrationAPI.Models;
 using System.Text;
 using Tesseract;
+using UglyToad.PdfPig.Content;
 using UglyToad.PdfPig;
 
 namespace OllamaIntegrationAPI.Services
@@ -146,16 +147,26 @@ namespace OllamaIntegrationAPI.Services
                         {
                             try
                             {
-                                using var magick = new MagickImage([.. image.RawBytes]);
-                                magick.Format = MagickFormat.Png;
-                                var pngBytes = magick.ToByteArray();
-                                using var pix = Pix.LoadFromMemory(pngBytes);
+                                if (!TryGetOcrReadyPdfImageBytes(image, out var imageBytes, out var imageSource))
+                                {
+                                    logger?.LogInformation(
+                                        "[PDF] Imagen embebida en página {PageNum} omitida para OCR directo; formato no compatible. Se usará renderizado de página.",
+                                        page.Number);
+                                    continue;
+                                }
+
+                                using var pix = Pix.LoadFromMemory(imageBytes);
                                 using var result = engine.Process(pix);
                                 var ocrText = result.GetText();
                                 if (!string.IsNullOrWhiteSpace(ocrText))
                                 {
                                     sb.AppendLine(ocrText);
                                     ocrFromEmbedded = true;
+                                    logger?.LogInformation(
+                                        "[PDF] OCR directo sobre imagen embebida ({ImageSource}) extrajo {Chars} chars en página {PageNum}.",
+                                        imageSource,
+                                        ocrText.Length,
+                                        page.Number);
                                 }
                             }
                             catch (Exception ex)
@@ -355,6 +366,78 @@ namespace OllamaIntegrationAPI.Services
 
             return string.Join(" ",
                 text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        }
+
+        private static bool TryGetOcrReadyPdfImageBytes(IPdfImage image, out byte[] imageBytes, out string imageSource)
+        {
+            if (image.TryGetPng(out var pngBytes) && pngBytes is { Length: > 0 })
+            {
+                imageBytes = pngBytes;
+                imageSource = "PdfPig PNG";
+                return true;
+            }
+
+            if (LooksLikeSupportedRasterImage(image.RawBytes))
+            {
+                imageBytes = [.. image.RawBytes];
+                imageSource = "raw raster";
+                return true;
+            }
+
+            imageBytes = [];
+            imageSource = string.Empty;
+            return false;
+        }
+
+        private static bool LooksLikeSupportedRasterImage(IReadOnlyList<byte> bytes)
+        {
+            if (bytes.Count >= 8
+                && bytes[0] == 0x89
+                && bytes[1] == 0x50
+                && bytes[2] == 0x4E
+                && bytes[3] == 0x47
+                && bytes[4] == 0x0D
+                && bytes[5] == 0x0A
+                && bytes[6] == 0x1A
+                && bytes[7] == 0x0A)
+            {
+                return true;
+            }
+
+            if (bytes.Count >= 3
+                && bytes[0] == 0xFF
+                && bytes[1] == 0xD8
+                && bytes[2] == 0xFF)
+            {
+                return true;
+            }
+
+            if (bytes.Count >= 4
+                && ((bytes[0] == 0x49 && bytes[1] == 0x49 && bytes[2] == 0x2A && bytes[3] == 0x00)
+                    || (bytes[0] == 0x4D && bytes[1] == 0x4D && bytes[2] == 0x00 && bytes[3] == 0x2A)))
+            {
+                return true;
+            }
+
+            if (bytes.Count >= 2
+                && bytes[0] == 0x42
+                && bytes[1] == 0x4D)
+            {
+                return true;
+            }
+
+            if (bytes.Count >= 6
+                && bytes[0] == 0x47
+                && bytes[1] == 0x49
+                && bytes[2] == 0x46
+                && bytes[3] == 0x38
+                && (bytes[4] == 0x37 || bytes[4] == 0x39)
+                && bytes[5] == 0x61)
+            {
+                return true;
+            }
+
+            return false;
         }
 
         private static IEnumerable<ImagePart> EnumerateImageParts(WordprocessingDocument document)

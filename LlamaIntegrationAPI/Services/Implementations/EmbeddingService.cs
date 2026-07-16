@@ -24,7 +24,7 @@ public class EmbeddingService : IEmbeddingService
         _httpClient = httpClient;
         _logger = logger;
         _httpClient.BaseAddress = new Uri(host);
-        _httpClient.Timeout = TimeSpan.FromMinutes(10);
+        _httpClient.Timeout = TimeSpan.FromHours(3);
         _model = config["EMBEDDING_MODEL"] ?? "nomic-embed-text";
         Dimensions = int.TryParse(config["EMBEDDING_DIMENSIONS"], out var dim) ? dim : 768;
     }

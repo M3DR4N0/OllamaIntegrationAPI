@@ -26,7 +26,7 @@ public class LLMService : ILLMService
         _httpClient = httpClient;
         _logger = logger;
         _httpClient.BaseAddress = new Uri(host);
-        _httpClient.Timeout = TimeSpan.FromHours(1);
+        _httpClient.Timeout = TimeSpan.FromHours(3);
 
         // Read a hard cap from config; default 8192 keeps the local model from reloading its KV-cache.
         _maxNumCtx = int.TryParse(config["LLM_MAX_NUM_CTX"], out var cap) ? cap : 8192;
