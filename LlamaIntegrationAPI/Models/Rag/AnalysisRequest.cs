@@ -1,3 +1,5 @@
+using LlamaIntegrationAPI.Models.Documents;
+
 namespace LlamaIntegrationAPI.Models.Rag;
 
 public class AnalysisRequest
@@ -21,4 +23,7 @@ public class AnalysisRequest
     public int TopK { get; set; } = 5;
     public bool ForceSpanish { get; set; } = true;
     public bool ReviewWithAi { get; set; } = true;
+    public string? OutputFormat { get; set; }
+
+    public DocumentOutputFormat ResolvedOutputFormat => DocumentOutputFormatParser.Parse(OutputFormat);
 }

@@ -44,6 +44,15 @@ public class LLMService : ILLMService
         string model,
         CancellationToken ct = default,
         int? maxPredict = null)
+        => await GenerateAsync(systemPrompt, userPrompt, model, requireJson: false, ct, maxPredict);
+
+    public async Task<string> GenerateAsync(
+        string systemPrompt,
+        string userPrompt,
+        string model,
+        bool requireJson,
+        CancellationToken ct = default,
+        int? maxPredict = null)
     {
         var resolvedMaxPredict = ResolveMaxPredict(maxPredict);
         var numCtx = CalculateNumCtx(systemPrompt, userPrompt, resolvedMaxPredict);
@@ -55,7 +64,7 @@ public class LLMService : ILLMService
             system = systemPrompt,
             prompt = userPrompt,
             stream = false,
-            format = (object?)null,
+            format = requireJson ? "json" : null,
             options
         };
 
@@ -63,10 +72,11 @@ public class LLMService : ILLMService
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
         _logger.LogInformation(
-            "[LLMService] Sending generate request - model: {Model} | num_ctx: {NumCtx} | max_predict: {MaxPredict}",
+            "[LLMService] Sending generate request - model: {Model} | num_ctx: {NumCtx} | max_predict: {MaxPredict} | json: {RequireJson}",
             model,
             numCtx,
-            resolvedMaxPredict?.ToString() ?? "default");
+            resolvedMaxPredict?.ToString() ?? "default",
+            requireJson);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
 

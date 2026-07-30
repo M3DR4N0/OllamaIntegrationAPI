@@ -9,6 +9,7 @@ using LlamaIntegrationAPI.Models.Contracts;
 using LlamaIntegrationAPI.Models.Rag;
 using LlamaIntegrationAPI.Services.Ai;
 using LlamaIntegrationAPI.Services.Interfaces;
+using Microsoft.Extensions.Options;
 
 namespace LlamaIntegrationAPI.Services.Implementations;
 
@@ -17,6 +18,7 @@ public class ContractMergeService(
     IChunkingService chunker,
     ILLMService llm,
     IAiGatewayService aiGatewayService,
+    IOptionsMonitor<AiOptions> aiOptionsMonitor,
     IConfiguration configuration,
     ILogger<ContractMergeService> logger) : IContractMergeService
 {
@@ -146,8 +148,8 @@ public class ContractMergeService(
           "summary": "descripcion breve",
           "operations": [
             {
-              "targetBlockId": "block_0004 | __before_signatures__ | __document_end__",
-              "placement": "after | before | before_signatures | append_end",
+              "targetBlockId": "block_0004",
+              "placement": "before",
               "sourceClauseId": "clause_001",
               "heading": "titulo opcional de la nueva clausula",
               "content": "texto opcional en varios parrafos",
@@ -156,6 +158,17 @@ public class ContractMergeService(
             }
           ]
         }
+
+        Ejemplos validos de targetBlockId:
+        - "block_0004"
+        - "__before_signatures__"
+        - "__document_end__"
+
+        Ejemplos validos de placement:
+        - "before"
+        - "after"
+        - "before_signatures"
+        - "append_end"
 
         REGLAS:
         - No reescribas todo el contrato.
@@ -622,6 +635,16 @@ public class ContractMergeService(
         var sourceContext = BuildSourceClauseCatalogContext(sourceClauses);
         var planContext = BuildDocxPlanContext(prompt, baseBlocks, sourceContext);
 
+        if (!aiOptionsMonitor.CurrentValue.UseExternalProviders)
+        {
+            logger.LogInformation("External providers are disabled. Building DOCX merge plan with the local model only.");
+            return await TryBuildDocxPlanWithLocalModelAsync(
+                prompt,
+                planContext,
+                request.Model,
+                ct);
+        }
+
         var externalResult = await TryBuildDocxPlanWithExternalAiAsync(
             prompt,
             planContext,
@@ -698,14 +721,37 @@ public class ContractMergeService(
     {
         try
         {
-            var rawText = await llm.GenerateAsync(
+            var userPrompt = BuildDocxPlanUserPrompt(prompt, planContext);
+
+            var plan = await llm.GenerateAsync<DocxMergePlan>(
                 DocxPlanSystemInstruction,
-                BuildDocxPlanUserPrompt(prompt, planContext),
+                userPrompt,
                 model,
                 ct,
                 maxPredict: _localMaxPredict);
 
-            var plan = JsonSanitizer.TryExtractJson<DocxMergePlan>(rawText);
+            if (plan is not null)
+            {
+                var rawJson = await llm.GenerateAsync(
+                    DocxPlanSystemInstruction,
+                    userPrompt,
+                    model,
+                    requireJson: true,
+                    ct,
+                    maxPredict: _localMaxPredict);
+
+                return DocxPlanGenerationResult.FromSuccess("local", plan, rawJson);
+            }
+
+            var rawText = await llm.GenerateAsync(
+                DocxPlanSystemInstruction,
+                userPrompt,
+                model,
+                requireJson: true,
+                ct,
+                maxPredict: _localMaxPredict);
+
+            plan = JsonSanitizer.TryExtractJson<DocxMergePlan>(rawText);
 
             if (plan is null)
             {
@@ -735,6 +781,12 @@ public class ContractMergeService(
         string? externalModel,
         CancellationToken ct)
     {
+        if (!aiOptionsMonitor.CurrentValue.UseExternalProviders)
+        {
+            logger.LogInformation("External providers are disabled. Skipping external Markdown review and keeping the local draft.");
+            return ProviderExecutionResult.FromError("External providers are disabled.");
+        }
+
         try
         {
             using var timeoutScope = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -1203,7 +1255,92 @@ public class ContractMergeService(
             sanitized.Add(normalized);
         }
 
+        foreach (var clause in sourceClauses.Where(clause => !usedClauseIds.Contains(clause.ClauseId)))
+        {
+            var fallback = CreateFallbackDocxOperation(clause, blockById.Values, baseTextIndex);
+            if (fallback is null)
+                continue;
+
+            var signature = BuildOperationSignature(fallback);
+            if (!seenSignatures.Add(signature))
+                continue;
+
+            if (OperationAlreadyExistsInBase(fallback, baseTextIndex))
+            {
+                logger.LogInformation(
+                    "Skipping fallback DOCX merge operation because similar content already exists in the base document. Clause: '{ClauseId}'.",
+                    clause.ClauseId);
+                continue;
+            }
+
+            usedClauseIds.Add(clause.ClauseId);
+            sanitized.Add(fallback);
+            logger.LogInformation(
+                "Added fallback DOCX merge operation for source clause '{ClauseId}' targeting '{TargetBlockId}'.",
+                clause.ClauseId,
+                fallback.TargetBlockId);
+        }
+
         return sanitized;
+    }
+
+    private DocxMergeOperation? CreateFallbackDocxOperation(
+        SourceClauseCandidate clause,
+        IEnumerable<DocxBlockSummary> availableBlocks,
+        IReadOnlyList<string> baseTextIndex)
+    {
+        var inferredTarget = InferBestTargetBlock(clause, availableBlocks);
+        if (inferredTarget is null)
+        {
+            logger.LogWarning(
+                "Could not infer a DOCX target block for source clause '{ClauseId}'. No fallback operation will be created.",
+                clause.ClauseId);
+            return null;
+        }
+
+        var placement = DeterminePreferredPlacement(clause, inferredTarget);
+        var heading = BuildOperationHeading(null, clause, inferredTarget, availableBlocks, placement);
+        var paragraphs = StripRedundantClauseHeadingLead(
+            SplitClauseBodyIntoParagraphs(ExtractClauseBody(clause.Text, clause.Label)),
+            heading,
+            clause.Label);
+
+        var uniqueParagraphs = new List<string>();
+        var seenParagraphs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var paragraph in paragraphs)
+        {
+            var paragraphSignature = NormalizeComparisonText(paragraph);
+            if (paragraphSignature.Length == 0 || !seenParagraphs.Add(paragraphSignature))
+                continue;
+
+            uniqueParagraphs.Add(paragraph);
+        }
+
+        var combinedBody = string.Join("\n\n", uniqueParagraphs);
+        if (!IsLikelyMeaningfulOperation(heading, combinedBody) ||
+            !OperationMatchesSourceClause(heading, uniqueParagraphs, clause))
+        {
+            logger.LogWarning(
+                "Discarding fallback DOCX merge operation for source clause '{ClauseId}' because the normalized content is not usable.",
+                clause.ClauseId);
+            return null;
+        }
+
+        var fallback = new DocxMergeOperation
+        {
+            TargetBlockId = inferredTarget.BlockId,
+            Placement = placement,
+            SourceClauseId = clause.ClauseId,
+            Heading = heading,
+            Content = uniqueParagraphs.Count == 0 ? null : string.Join("\n\n", uniqueParagraphs),
+            Paragraphs = uniqueParagraphs,
+            Reason = "fallback_inferred_clause_insertion"
+        };
+
+        if (OperationAlreadyExistsInBase(fallback, baseTextIndex))
+            return null;
+
+        return fallback;
     }
 
     private DocxMergeOperation? NormalizeDocxOperation(
@@ -1213,7 +1350,7 @@ public class ContractMergeService(
         IReadOnlyDictionary<string, SourceClauseCandidate> clausesById,
         ISet<string> usedClauseIds)
     {
-        var targetBlockId = NormalizeOptionalText(operation.TargetBlockId);
+        var targetBlockId = NormalizeTargetBlockId(operation.TargetBlockId, validTargetIds);
         var placement = NormalizeOptionalText(operation.Placement)?.ToLowerInvariant();
         var sourceClauseId = NormalizeOptionalText(operation.SourceClauseId);
         var heading = NormalizeOptionalText(operation.Heading);
@@ -1266,6 +1403,7 @@ public class ContractMergeService(
             placement = targetBlock is null ? placement : "before";
         }
 
+        placement = DeterminePreferredPlacement(matchedClause, targetBlock, placement);
         heading = BuildOperationHeading(heading, matchedClause, targetBlock, blockById.Values, placement);
 
         var paragraphs = StripRedundantClauseHeadingLead(
@@ -1312,6 +1450,35 @@ public class ContractMergeService(
             Paragraphs = uniqueParagraphs,
             Reason = reason
         };
+    }
+
+    private static string? NormalizeTargetBlockId(string? rawTargetBlockId, ISet<string> validTargetIds)
+    {
+        var normalized = NormalizeOptionalText(rawTargetBlockId);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return null;
+
+        if (validTargetIds.Contains(normalized))
+            return normalized;
+
+        var candidates = normalized
+            .Split(['|', ',', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(NormalizeOptionalText)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var candidate in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate) && validTargetIds.Contains(candidate))
+                return candidate;
+        }
+
+        var specialAnchor = candidates.FirstOrDefault(candidate =>
+            string.Equals(candidate, "__before_signatures__", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(candidate, "__document_end__", StringComparison.OrdinalIgnoreCase));
+
+        return specialAnchor;
     }
 
     private static bool OperationAlreadyExistsInBase(
@@ -1417,7 +1584,55 @@ public class ContractMergeService(
             score += 0.25;
         }
 
+        if ((clauseTopic.Contains("almacen", StringComparison.OrdinalIgnoreCase) ||
+             clauseTopic.Contains("almacenaje", StringComparison.OrdinalIgnoreCase) ||
+             clauseTopic.Contains("nave", StringComparison.OrdinalIgnoreCase) ||
+             clauseTopic.Contains("instalacion", StringComparison.OrdinalIgnoreCase)) &&
+            (blockTopic.Contains("almacen", StringComparison.OrdinalIgnoreCase) ||
+             blockTopic.Contains("almacenamiento", StringComparison.OrdinalIgnoreCase) ||
+             blockTopic.Contains("nave", StringComparison.OrdinalIgnoreCase) ||
+             blockTopic.Contains("servicio", StringComparison.OrdinalIgnoreCase) ||
+             blockTopic.Contains("instalacion", StringComparison.OrdinalIgnoreCase)))
+        {
+            score += 0.35;
+        }
+
+        if ((clauseTopic.Contains("descripcion", StringComparison.OrdinalIgnoreCase) ||
+             clauseTopic.Contains("ubicado", StringComparison.OrdinalIgnoreCase) ||
+             clauseTopic.Contains("metros", StringComparison.OrdinalIgnoreCase)) &&
+            (blockTopic.Contains("descripcion", StringComparison.OrdinalIgnoreCase) ||
+             blockTopic.Contains("servicio", StringComparison.OrdinalIgnoreCase) ||
+             blockTopic.Contains("almacenamiento", StringComparison.OrdinalIgnoreCase)))
+        {
+            score += 0.2;
+        }
+
         return score;
+    }
+
+    private static string DeterminePreferredPlacement(
+        SourceClauseCandidate clause,
+        DocxBlockSummary? targetBlock,
+        string? requestedPlacement = null)
+    {
+        if (targetBlock is null)
+        {
+            return string.IsNullOrWhiteSpace(requestedPlacement)
+                ? "append_end"
+                : requestedPlacement;
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestedPlacement))
+        {
+            if (ShouldUseParagraphHeadingForClause(clause, targetBlock))
+                return "before";
+
+            return requestedPlacement;
+        }
+
+        return ShouldUseParagraphHeadingForClause(clause, targetBlock)
+            ? "before"
+            : "after";
     }
 
     private static bool IsLikelyMeaningfulOperation(string? heading, string body)
@@ -1465,6 +1680,7 @@ public class ContractMergeService(
         var clauses = new List<SourceClauseCandidate>();
         var seenTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var nextSequence = 1;
+        var tableDerivedClauseCount = 0;
 
         if (docxBytes is not null)
         {
@@ -1477,7 +1693,17 @@ public class ContractMergeService(
                     fileName,
                     clause.Label,
                     clause.Text);
+                tableDerivedClauseCount = clauses.Count;
             }
+        }
+
+        if (tableDerivedClauseCount > 0)
+        {
+            logger.LogInformation(
+                "Using {Count} table-derived source clause candidate(s) for '{FileName}' and skipping chunk-based clause recombination.",
+                tableDerivedClauseCount,
+                fileName);
+            return clauses;
         }
 
         var chunks = chunker.Chunk(
@@ -1555,6 +1781,13 @@ public class ContractMergeService(
                     .FirstOrDefault(cell =>
                         !string.Equals(cell, bodyCell, StringComparison.OrdinalIgnoreCase) &&
                         cell.Length <= 180);
+
+                if (string.IsNullOrWhiteSpace(labelCell) &&
+                    TrySplitSingleCellClause(bodyCell, out var inferredLabel, out var inferredBody))
+                {
+                    labelCell = inferredLabel;
+                    bodyCell = inferredBody;
+                }
 
                 yield return new SourceClauseCandidate(
                     $"clause_{sequence:000}",
@@ -1718,7 +1951,7 @@ public class ContractMergeService(
         return wordCount >= 20;
     }
 
-    private static string BuildOperationHeading(
+    private static string? BuildOperationHeading(
         string? requestedHeading,
         SourceClauseCandidate clause,
         DocxBlockSummary? targetBlock,
@@ -1727,9 +1960,11 @@ public class ContractMergeService(
     {
         var normalizedRequestedHeading = NormalizeOptionalText(requestedHeading);
         var label = NormalizeOptionalText(clause.Label) ?? "Cláusula adicional";
-        var shouldUseParagraphHeading = targetBlock is not null &&
-            IsMajorSectionHeadingText(targetBlock.Heading) &&
+        var shouldUseParagraphHeading = ShouldUseParagraphHeadingForClause(clause, targetBlock) &&
             placement is "before" or "inside_start" or "inside-start" or "prepend";
+
+        if (ShouldSuppressStandaloneHeading(clause, targetBlock, shouldUseParagraphHeading))
+            return null;
 
         if (!string.IsNullOrWhiteSpace(normalizedRequestedHeading) &&
             !shouldUseParagraphHeading &&
@@ -1744,6 +1979,58 @@ public class ContractMergeService(
 
         var ordinal = DetermineInsertedParagraphOrdinal(targetBlock!, availableBlocks);
         return $"PÁRRAFO {ordinal}: {label}";
+    }
+
+    private static bool ShouldUseParagraphHeadingForClause(
+        SourceClauseCandidate clause,
+        DocxBlockSummary? targetBlock)
+    {
+        if (targetBlock is null || !IsMajorSectionHeadingText(targetBlock.Heading))
+            return false;
+
+        if (LooksLikeExplicitStructuredClause(clause.Label))
+            return true;
+
+        if (LooksLikeDescriptiveInlineClause(clause))
+            return false;
+
+        var normalized = NormalizeComparisonText($"{clause.Label}\n{clause.Text}");
+        return normalized.Contains("seguro", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("poliza", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("subrogacion", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("responsabil", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("confidencial", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("vigencia", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("terminacion", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("indemne", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ShouldSuppressStandaloneHeading(
+        SourceClauseCandidate clause,
+        DocxBlockSummary? targetBlock,
+        bool shouldUseParagraphHeading)
+    {
+        if (shouldUseParagraphHeading || targetBlock is null)
+            return false;
+
+        if (!IsMajorSectionHeadingText(targetBlock.Heading))
+            return false;
+
+        if (LooksLikeExplicitStructuredClause(clause.Label))
+            return false;
+
+        return LooksLikeDescriptiveInlineClause(clause);
+    }
+
+    private static bool LooksLikeDescriptiveInlineClause(SourceClauseCandidate clause)
+    {
+        var normalized = CanonicalizeHeadingText($"{clause.Label} {clause.Text}");
+        return normalized.Contains("DESCRIPCION") ||
+               normalized.Contains("NAVE") ||
+               normalized.Contains("INSTALACION") ||
+               normalized.Contains("UBICADO") ||
+               normalized.Contains("METROS") ||
+               normalized.Contains("AREA ");
     }
 
     private static string ExtractClauseBody(string text, string label)
@@ -1783,6 +2070,9 @@ public class ContractMergeService(
         if (string.IsNullOrWhiteSpace(normalized))
             return null;
 
+        if (TrySplitSingleCellClause(normalized, out var inferredLabel, out _))
+            return inferredLabel;
+
         var firstSentence = normalized
             .Split(['.', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries)
             .Select(part => part.Trim())
@@ -1794,6 +2084,30 @@ public class ContractMergeService(
         return firstSentence.Length <= 140
             ? firstSentence
             : firstSentence[..140].TrimEnd() + "...";
+    }
+
+    private static bool TrySplitSingleCellClause(string text, out string label, out string body)
+    {
+        label = string.Empty;
+        body = text;
+
+        var normalized = NormalizeOptionalText(text);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return false;
+
+        var colonIndex = normalized.IndexOf(':');
+        if (colonIndex <= 0 || colonIndex >= normalized.Length - 1)
+            return false;
+
+        var candidateLabel = normalized[..colonIndex].Trim();
+        var candidateBody = normalized[(colonIndex + 1)..].Trim();
+
+        if (candidateLabel.Length == 0 || candidateLabel.Length > 180 || candidateBody.Length < 20)
+            return false;
+
+        label = candidateLabel;
+        body = candidateBody;
+        return true;
     }
 
     private static bool LooksLikeStandaloneClauseHeading(string text)

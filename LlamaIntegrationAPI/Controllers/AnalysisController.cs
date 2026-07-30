@@ -12,6 +12,7 @@ namespace LlamaIntegrationAPI.Controllers;
 [Route("api/[controller]")]
 public class AnalysisController(
     IAnalysisService analysisService,
+    IDocumentOutputService documentOutputService,
     ILogger<AnalysisController> logger) : ControllerBase
 {
     /// <summary>
@@ -72,6 +73,34 @@ public class AnalysisController(
         try
         {
             var result = await analysisService.AnalyzeContractAsync(request, ct);
+
+            if (request.ResolvedOutputFormat == Models.Documents.DocumentOutputFormat.Docx)
+            {
+                var generatedDocument = documentOutputService.CreateWordDocument(
+                    result.Answer,
+                    $"{Path.GetFileNameWithoutExtension(request.ResolvedFile.FileName)}-analysis");
+
+                return File(
+                    generatedDocument.Content,
+                    generatedDocument.ContentType,
+                    generatedDocument.FileName);
+            }
+
+            if (request.ResolvedOutputFormat == Models.Documents.DocumentOutputFormat.Both)
+            {
+                var generatedDocument = documentOutputService.CreateWordDocument(
+                    result.Answer,
+                    $"{Path.GetFileNameWithoutExtension(request.ResolvedFile.FileName)}-analysis");
+
+                result = result with
+                {
+                    AnswerFormat = "markdown",
+                    WordDocument = generatedDocument.Content,
+                    WordDocumentFileName = generatedDocument.FileName,
+                    WordDocumentContentType = generatedDocument.ContentType
+                };
+            }
+
             return Ok(ResponseHandler.Success(result));
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("No se pudo extraer texto"))

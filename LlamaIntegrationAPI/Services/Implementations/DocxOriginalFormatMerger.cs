@@ -31,6 +31,10 @@ internal static class DocxOriginalFormatMerger
         @"secuencia[_\s-]*clausulas|^«.*»$|^Â«.*Â»$|^<<.*>>$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly Regex ParagraphHeadingRegex = new(
+        @"^(P[ÁA]RRAFO)\s+([IVXLCDM]+)(\s*:?\s*)(.*)$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     public static IReadOnlyList<DocxBlockSummary> Summarize(byte[] docxBytes)
     {
         using var stream = new MemoryStream(docxBytes);
@@ -249,22 +253,20 @@ internal static class DocxOriginalFormatMerger
             ?? blocks.FirstOrDefault(block => block.HeadingParagraph is not null)?.HeadingParagraph
             ?? placeholderTemplate
             ?? body.Descendants<Paragraph>().FirstOrDefault();
-        var bodyTemplate = placeholderTemplate
-            ?? targetBlock?.FirstBodyParagraph
-            ?? blocks.FirstOrDefault(block => block.FirstBodyParagraph is not null)?.FirstBodyParagraph
-            ?? body.Descendants<Paragraph>().FirstOrDefault();
+        var bodyTemplate = ResolveBodyTemplate(targetBlock, placeholderTemplate, blocks, body, normalizedContent);
         var subClauseHeadingTemplate = FindSubClauseHeadingTemplate(targetBlock);
         var headingTemplate = ShouldUseBodyTemplateForHeading(targetBlock, normalizedContent.Heading)
             ? subClauseHeadingTemplate ?? bodyTemplate
             : targetHeadingTemplate;
 
         var insertedParagraphs = new List<Paragraph>();
+        var reuseBodyFormattingForHeading = ShouldReuseBodyFormattingForInsertedHeading(targetBlock, normalizedContent);
 
         if (!string.IsNullOrWhiteSpace(normalizedContent.Heading))
             insertedParagraphs.Add(CreateParagraphFromTemplate(
-                headingTemplate,
+                reuseBodyFormattingForHeading ? bodyTemplate : headingTemplate,
                 normalizedContent.Heading,
-                preserveDirectFormatting: true,
+                preserveDirectFormatting: !reuseBodyFormattingForHeading,
                 suppressUnderline: IsSubClauseHeadingText(normalizedContent.Heading)));
 
         insertedParagraphs.AddRange(
@@ -394,6 +396,7 @@ internal static class DocxOriginalFormatMerger
             }
 
             insertionAnchors[insertionKey] = insertedParagraphs.Last();
+            RenumberParagraphOrdinalsInSection(body, sectionHeading);
             return true;
         }
 
@@ -404,7 +407,38 @@ internal static class DocxOriginalFormatMerger
 
         InsertAfter(appendAnchor, insertedParagraphs);
         insertionAnchors[appendKey] = insertedParagraphs.Last();
+        RenumberParagraphOrdinalsInSection(body, sectionHeading);
         return true;
+    }
+
+    private static void RenumberParagraphOrdinalsInSection(Body body, Paragraph sectionHeading)
+    {
+        var documentParagraphs = body.Descendants<Paragraph>().ToList();
+        var sectionStartIndex = documentParagraphs.FindIndex(paragraph => ReferenceEquals(paragraph, sectionHeading));
+        if (sectionStartIndex < 0)
+            return;
+
+        var expectedOrdinal = 1;
+
+        for (var i = sectionStartIndex + 1; i < documentParagraphs.Count; i++)
+        {
+            var paragraph = documentParagraphs[i];
+            var paragraphText = GetParagraphText(paragraph);
+
+            if (IsMajorSectionHeadingText(paragraphText))
+                break;
+
+            if (!TryParseParagraphHeading(paragraphText, out var prefix, out _, out var separator, out var remainder))
+                continue;
+
+            var normalizedSeparator = string.IsNullOrWhiteSpace(separator) ? ": " : separator;
+            var updatedText = string.IsNullOrWhiteSpace(remainder)
+                ? $"{prefix} {IntToRoman(expectedOrdinal)}"
+                : $"{prefix} {IntToRoman(expectedOrdinal)}{normalizedSeparator}{remainder}";
+
+            ReplaceParagraphText(paragraph, updatedText);
+            expectedOrdinal++;
+        }
     }
 
     private static bool TryParseParagraphOrdinalValue(string text, out int ordinalValue)
@@ -425,6 +459,36 @@ internal static class DocxOriginalFormatMerger
 
         ordinalValue = RomanToInt(match.Groups[1].Value.ToUpperInvariant());
         return ordinalValue > 0;
+    }
+
+    private static bool TryParseParagraphHeading(
+        string text,
+        out string prefix,
+        out int ordinalValue,
+        out string separator,
+        out string remainder)
+    {
+        prefix = string.Empty;
+        ordinalValue = 0;
+        separator = string.Empty;
+        remainder = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var match = ParagraphHeadingRegex.Match(text.Trim());
+        if (!match.Success)
+            return false;
+
+        var parsedOrdinal = RomanToInt(match.Groups[2].Value.ToUpperInvariant());
+        if (parsedOrdinal <= 0)
+            return false;
+
+        prefix = match.Groups[1].Value.ToUpperInvariant().Replace("PARRAFO", "PÁRRAFO");
+        ordinalValue = parsedOrdinal;
+        separator = match.Groups[3].Value;
+        remainder = match.Groups[4].Value.Trim();
+        return true;
     }
 
     private static bool TryInsertAtPlaceholder(
@@ -520,6 +584,83 @@ internal static class DocxOriginalFormatMerger
         }
 
         return IsMajorSectionHeadingText(targetBlock.HeadingText) && IsSubClauseHeadingText(heading);
+    }
+
+    private static bool ShouldReuseBodyFormattingForInsertedHeading(
+        DocxBlock? targetBlock,
+        NormalizedOperationContent normalizedContent)
+    {
+        if (targetBlock is null || string.IsNullOrWhiteSpace(normalizedContent.Heading))
+            return false;
+
+        if (IsSubClauseHeadingText(normalizedContent.Heading))
+            return true;
+
+        if (!IsMajorSectionHeadingText(targetBlock.HeadingText))
+            return false;
+
+        if (normalizedContent.Paragraphs.Count == 0)
+            return true;
+
+        return normalizedContent.Paragraphs.Count == 1 &&
+               normalizedContent.Paragraphs[0].Length <= 400;
+    }
+
+    private static Paragraph? ResolveBodyTemplate(
+        DocxBlock? targetBlock,
+        Paragraph? placeholderTemplate,
+        IReadOnlyList<DocxBlock> blocks,
+        Body body,
+        NormalizedOperationContent normalizedContent)
+    {
+        if (placeholderTemplate is not null)
+            return placeholderTemplate;
+
+        var preferredFromTarget = FindPreferredBodyParagraph(targetBlock, normalizedContent);
+        if (preferredFromTarget is not null)
+            return preferredFromTarget;
+
+        return blocks.FirstOrDefault(block => block.FirstBodyParagraph is not null)?.FirstBodyParagraph
+               ?? body.Descendants<Paragraph>().FirstOrDefault();
+    }
+
+    private static Paragraph? FindPreferredBodyParagraph(
+        DocxBlock? targetBlock,
+        NormalizedOperationContent normalizedContent)
+    {
+        if (targetBlock?.Paragraphs is null || targetBlock.Paragraphs.Count == 0)
+            return targetBlock?.FirstBodyParagraph;
+
+        var bodyParagraphs = targetBlock.Paragraphs
+            .Where(paragraph => paragraph != targetBlock.HeadingParagraph)
+            .ToList();
+
+        if (bodyParagraphs.Count == 0)
+            return targetBlock.FirstBodyParagraph;
+
+        if (string.IsNullOrWhiteSpace(normalizedContent.Heading) && normalizedContent.Paragraphs.Count <= 1)
+        {
+            var nonListParagraph = bodyParagraphs.FirstOrDefault(paragraph => !IsListLikeParagraph(paragraph));
+            if (nonListParagraph is not null)
+                return nonListParagraph;
+        }
+
+        return targetBlock.FirstBodyParagraph ?? bodyParagraphs.FirstOrDefault();
+    }
+
+    private static bool IsListLikeParagraph(Paragraph paragraph)
+    {
+        var styleId = paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
+        if (!string.IsNullOrWhiteSpace(styleId) &&
+            styleId.Contains("List", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (paragraph.ParagraphProperties?.NumberingProperties is not null)
+            return true;
+
+        return false;
     }
 
     private static bool ShouldUseBodyTemplateForHeading(DocxBlock? targetBlock, string? heading)
@@ -696,6 +837,58 @@ internal static class DocxOriginalFormatMerger
         cloned.RemoveAllChildren<Shading>();
 
         return cloned.HasChildren ? cloned : null;
+    }
+
+    private static void ReplaceParagraphText(Paragraph paragraph, string text)
+    {
+        var templateRunProperties = paragraph.Elements<Run>()
+            .Select(element => element.RunProperties)
+            .FirstOrDefault(properties => properties is not null);
+
+        paragraph.RemoveAllChildren<Run>();
+
+        var run = new Run();
+        if (templateRunProperties is not null)
+            run.RunProperties = (RunProperties)templateRunProperties.CloneNode(true);
+
+        run.Append(new Text(text) { Space = SpaceProcessingModeValues.Preserve });
+        paragraph.Append(run);
+    }
+
+    private static string IntToRoman(int value)
+    {
+        if (value <= 0)
+            return "I";
+
+        var map = new (int Value, string Roman)[]
+        {
+            (1000, "M"),
+            (900, "CM"),
+            (500, "D"),
+            (400, "CD"),
+            (100, "C"),
+            (90, "XC"),
+            (50, "L"),
+            (40, "XL"),
+            (10, "X"),
+            (9, "IX"),
+            (5, "V"),
+            (4, "IV"),
+            (1, "I")
+        };
+
+        var sb = new StringBuilder();
+
+        foreach (var item in map)
+        {
+            while (value >= item.Value)
+            {
+                sb.Append(item.Roman);
+                value -= item.Value;
+            }
+        }
+
+        return sb.Length == 0 ? "I" : sb.ToString();
     }
 
     private static string GetParagraphText(Paragraph paragraph)

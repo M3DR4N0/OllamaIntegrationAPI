@@ -1,3 +1,5 @@
+using LlamaIntegrationAPI.Models.Documents;
+
 namespace LlamaIntegrationAPI.Models.Contracts;
 
 public class ContractMergeRequest
@@ -28,4 +30,7 @@ public class ContractMergeRequest
     public int BaseDocumentIndex { get; set; } = 0;
 
     public bool ForceSpanish { get; set; } = true;
+    public string? OutputFormat { get; set; }
+
+    public DocumentOutputFormat ResolvedOutputFormat => DocumentOutputFormatParser.Parse(OutputFormat);
 }

@@ -36,6 +36,7 @@ builder.Services.Configure<KestrelServerOptions>(options =>
 });
 
 builder.Services.AddScoped<IDocumentProcessor, DocumentProcessor>();
+builder.Services.AddScoped<IDocumentOutputService, DocumentOutputService>();
 builder.Services.AddScoped<IPayloadBuilder, PayloadBuilder>();
 builder.Services.AddHttpClient<IOllamaService, OllamaService>();
 

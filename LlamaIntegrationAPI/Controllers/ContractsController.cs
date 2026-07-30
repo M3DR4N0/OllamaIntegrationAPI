@@ -36,6 +36,34 @@ public class ContractsController(
         try
         {
             var result = await contractMergeService.MergeContractsAsync(request, ct);
+
+            if (request.ResolvedOutputFormat == Models.Documents.DocumentOutputFormat.Docx)
+            {
+                if (result.WordDocument is null || result.WordDocument.Length == 0)
+                {
+                    logger.LogWarning(
+                        "[ContractsController] El merge Markdown finalizo pero no genero el archivo DOCX esperado.");
+                    return StatusCode(
+                        StatusCodes.Status500InternalServerError,
+                        ResponseHandler.Error("El merge finalizo pero no se pudo generar el archivo Word."));
+                }
+
+                return File(
+                    result.WordDocument,
+                    result.WordDocumentContentType ?? "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    result.WordDocumentFileName ?? "merged.docx");
+            }
+
+            if (request.ResolvedOutputFormat != Models.Documents.DocumentOutputFormat.Both)
+            {
+                result = result with
+                {
+                    WordDocument = null,
+                    WordDocumentFileName = null,
+                    WordDocumentContentType = null
+                };
+            }
+
             return Ok(ResponseHandler.Success(result));
         }
         catch (InvalidOperationException ex)

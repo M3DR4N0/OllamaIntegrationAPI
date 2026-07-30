@@ -3,6 +3,7 @@ namespace LlamaIntegrationAPI.Models.Ai;
 public class AiOptions
 {
     public string DefaultProvider { get; set; } = "Gemini";
+    public bool UseExternalProviders { get; set; } = true;
     public string DefaultLanguage { get; set; } = "es";
     public bool ForceSpanishResponses { get; set; } = true;
     public double Temperature { get; set; } = 0.2;

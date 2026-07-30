@@ -34,6 +34,17 @@ public class AiGatewayService(
             };
         }
 
+        if (!optionsMonitor.CurrentValue.UseExternalProviders)
+        {
+            return new AiGenerateResponse
+            {
+                Success = false,
+                Provider = "LocalOnly",
+                Model = string.Empty,
+                Error = "External AI providers are disabled. Local-only mode is enabled."
+            };
+        }
+
         var providerKey = ResolveProviderName(request);
         var provider = ResolveProvider(providerKey);
 
@@ -131,6 +142,9 @@ public class AiGatewayService(
 
     private string ResolveProviderName(AiGenerateRequest request)
     {
+        if (!optionsMonitor.CurrentValue.UseExternalProviders)
+            return "LocalOnly";
+
         if (!string.IsNullOrWhiteSpace(request.Provider))
             return request.Provider.Trim();
 

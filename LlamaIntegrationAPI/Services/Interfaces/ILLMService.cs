@@ -12,6 +12,15 @@ public interface ILLMService
         string model,
         CancellationToken ct = default,
         int? maxPredict = null);
+
+    Task<string> GenerateAsync(
+        string systemPrompt,
+        string userPrompt,
+        string model,
+        bool requireJson,
+        CancellationToken ct = default,
+        int? maxPredict = null);
+
     Task<T?> GenerateAsync<T>(
         string systemPrompt,
         string userPrompt,

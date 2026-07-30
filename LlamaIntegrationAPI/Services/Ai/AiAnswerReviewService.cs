@@ -27,6 +27,18 @@ public class AiAnswerReviewService(
             };
         }
 
+        if (!optionsMonitor.CurrentValue.UseExternalProviders)
+        {
+            logger.LogInformation(
+                "External AI review is disabled. Returning original draft for scenario '{Scenario}'.",
+                scenario);
+            return new AiAnswerReviewResult
+            {
+                FinalAnswer = draftAnswer,
+                OllamaAnswer = draftAnswer
+            };
+        }
+
         try
         {
             var reviewResponse = await aiGatewayService.GenerateAsync(
