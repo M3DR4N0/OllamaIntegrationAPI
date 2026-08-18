@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -30,6 +32,10 @@ internal static class DocxOriginalFormatMerger
     private static readonly Regex PlaceholderPattern = new(
         @"secuencia[_\s-]*clausulas|^«.*»$|^Â«.*Â»$|^<<.*>>$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex ListItemMarkerPattern = new(
+        @"^\s*[\u2022\u25CF\u25AA\u25E6\u2023\u2043]\s*",
+        RegexOptions.Compiled);
 
     private static readonly Regex ParagraphHeadingRegex = new(
         @"^(P[ÁA]RRAFO)\s+([IVXLCDM]+)(\s*:?\s*)(.*)$",
@@ -68,9 +74,16 @@ internal static class DocxOriginalFormatMerger
             var blocks = BuildBlocks(body);
             var insertionAnchors = new Dictionary<string, OpenXmlElement>(StringComparer.OrdinalIgnoreCase);
             var placeholderParagraph = FindPlaceholderParagraph(body);
+            var numberingPart = document.MainDocumentPart?.NumberingDefinitionsPart;
 
             foreach (var operation in operations)
-                ApplyOperation(body, blocks, operation, insertionAnchors, placeholderParagraph);
+                ApplyOperation(
+                    body,
+                    blocks,
+                    operation,
+                    insertionAnchors,
+                    placeholderParagraph,
+                    numberingPart);
 
             document.MainDocumentPart?.Document?.Save();
         }
@@ -150,7 +163,7 @@ internal static class DocxOriginalFormatMerger
             firstBodyParagraph,
             headingText,
             excerpt,
-            SignaturePattern.IsMatch(headingText) || SignaturePattern.IsMatch(excerpt),
+            paragraphs.Any(paragraph => IsSignatureText(GetParagraphText(paragraph))),
             maxParagraphOrdinalValue,
             paragraphOrdinalValues,
             paragraphs.ToList());
@@ -237,7 +250,8 @@ internal static class DocxOriginalFormatMerger
         IReadOnlyList<DocxBlock> blocks,
         DocxMergeOperation operation,
         IDictionary<string, OpenXmlElement> insertionAnchors,
-        Paragraph? placeholderParagraph)
+        Paragraph? placeholderParagraph,
+        NumberingDefinitionsPart? numberingPart)
     {
         var normalizedContent = NormalizeOperationContent(operation);
         if (normalizedContent.Paragraphs.Count == 0 && string.IsNullOrWhiteSpace(normalizedContent.Heading))
@@ -249,18 +263,32 @@ internal static class DocxOriginalFormatMerger
                                   placeholderParagraph.Parent is not null
             ? placeholderParagraph
             : null;
+        var bodyTemplate = ResolveBodyTemplate(targetBlock, placeholderTemplate, blocks, body, normalizedContent);
+        var listTemplate = FindListParagraphTemplate(targetBlock, blocks, body);
+        var containsListItems = normalizedContent.Paragraphs
+            .Any(paragraph => ListItemMarkerPattern.IsMatch(NormalizeOperationText(paragraph)));
+        var restartedListNumberingId = containsListItems
+            ? CreateRestartedListNumberingId(numberingPart, listTemplate)
+            : null;
         var targetHeadingTemplate = targetBlock?.HeadingParagraph
-            ?? blocks.FirstOrDefault(block => block.HeadingParagraph is not null)?.HeadingParagraph
+            ?? blocks
+                .Where(block => IsMajorSectionHeadingText(block.HeadingText) && !block.IsSignatureBlock)
+                .OrderByDescending(block => block.Sequence)
+                .Select(block => block.HeadingParagraph)
+                .FirstOrDefault(paragraph => paragraph is not null)
             ?? placeholderTemplate
             ?? body.Descendants<Paragraph>().FirstOrDefault();
-        var bodyTemplate = ResolveBodyTemplate(targetBlock, placeholderTemplate, blocks, body, normalizedContent);
         var subClauseHeadingTemplate = FindSubClauseHeadingTemplate(targetBlock);
-        var headingTemplate = ShouldUseBodyTemplateForHeading(targetBlock, normalizedContent.Heading)
+        var headingTemplate = IsStandaloneStructure(operation.Structure) ||
+                              string.Equals(operation.Structure, "list", StringComparison.OrdinalIgnoreCase)
+            ? targetHeadingTemplate
+            : ShouldUseBodyTemplateForHeading(targetBlock, normalizedContent.Heading)
             ? subClauseHeadingTemplate ?? bodyTemplate
-            : targetHeadingTemplate;
+            : bodyTemplate;
 
         var insertedParagraphs = new List<Paragraph>();
-        var reuseBodyFormattingForHeading = ShouldReuseBodyFormattingForInsertedHeading(targetBlock, normalizedContent);
+        var reuseBodyFormattingForHeading = !IsStandaloneStructure(operation.Structure) &&
+                                            ShouldReuseBodyFormattingForInsertedHeading(targetBlock, normalizedContent);
 
         if (!string.IsNullOrWhiteSpace(normalizedContent.Heading))
             insertedParagraphs.Add(CreateParagraphFromTemplate(
@@ -269,11 +297,30 @@ internal static class DocxOriginalFormatMerger
                 preserveDirectFormatting: !reuseBodyFormattingForHeading,
                 suppressUnderline: IsSubClauseHeadingText(normalizedContent.Heading)));
 
-        insertedParagraphs.AddRange(
-            normalizedContent.Paragraphs.Select(paragraph => CreateParagraphFromTemplate(
-                bodyTemplate,
-                paragraph,
-                preserveDirectFormatting: false)));
+        foreach (var paragraphText in normalizedContent.Paragraphs)
+        {
+            var isListItem = TryStripListItemMarker(paragraphText, out var listItemText);
+            var paragraphTemplate = isListItem && listTemplate is not null
+                ? listTemplate
+                : bodyTemplate;
+            var text = isListItem && listTemplate is not null
+                ? listItemText
+                : paragraphText;
+
+            insertedParagraphs.Add(CreateParagraphFromTemplate(
+                paragraphTemplate,
+                text,
+                preserveDirectFormatting: false,
+                numberingId: isListItem && listTemplate is not null
+                    ? restartedListNumberingId
+                    : null));
+        }
+
+        if (insertedParagraphs.Count > 0)
+        {
+            EnsureMinimumParagraphSpacing(insertedParagraphs[0], beforeTwips: 120, afterTwips: 60);
+            EnsureMinimumParagraphSpacing(insertedParagraphs[^1], afterTwips: 120);
+        }
 
         var placement = (operation.Placement ?? "after").Trim().ToLowerInvariant();
 
@@ -594,7 +641,7 @@ internal static class DocxOriginalFormatMerger
             return false;
 
         if (IsSubClauseHeadingText(normalizedContent.Heading))
-            return true;
+            return false;
 
         if (!IsMajorSectionHeadingText(targetBlock.HeadingText))
             return false;
@@ -613,14 +660,32 @@ internal static class DocxOriginalFormatMerger
         Body body,
         NormalizedOperationContent normalizedContent)
     {
-        if (placeholderTemplate is not null)
+        if (placeholderTemplate is not null &&
+            !IsHeadingParagraph(placeholderTemplate) &&
+            !IsCenteredParagraph(placeholderTemplate))
+        {
             return placeholderTemplate;
+        }
 
         var preferredFromTarget = FindPreferredBodyParagraph(targetBlock, normalizedContent);
         if (preferredFromTarget is not null)
             return preferredFromTarget;
 
-        return blocks.FirstOrDefault(block => block.FirstBodyParagraph is not null)?.FirstBodyParagraph
+        return blocks
+                   .Where(block => IsMajorSectionHeadingText(block.HeadingText))
+                   .SelectMany(block => block.Paragraphs)
+                   .FirstOrDefault(paragraph =>
+                       !IsHeadingParagraph(paragraph) &&
+                       !IsListLikeParagraph(paragraph) &&
+                       !IsCenteredParagraph(paragraph))
+               ?? blocks
+                   .SelectMany(block => block.Paragraphs)
+                   .FirstOrDefault(paragraph =>
+                       !IsHeadingParagraph(paragraph) &&
+                       !IsListLikeParagraph(paragraph) &&
+                       !IsCenteredParagraph(paragraph))
+               ?? body.Descendants<Paragraph>().FirstOrDefault(paragraph =>
+                   !IsHeadingParagraph(paragraph) && !IsCenteredParagraph(paragraph))
                ?? body.Descendants<Paragraph>().FirstOrDefault();
     }
 
@@ -629,14 +694,17 @@ internal static class DocxOriginalFormatMerger
         NormalizedOperationContent normalizedContent)
     {
         if (targetBlock?.Paragraphs is null || targetBlock.Paragraphs.Count == 0)
-            return targetBlock?.FirstBodyParagraph;
+            return null;
 
         var bodyParagraphs = targetBlock.Paragraphs
-            .Where(paragraph => paragraph != targetBlock.HeadingParagraph)
+            .Where(paragraph =>
+                paragraph != targetBlock.HeadingParagraph &&
+                !IsHeadingParagraph(paragraph) &&
+                !IsCenteredParagraph(paragraph))
             .ToList();
 
         if (bodyParagraphs.Count == 0)
-            return targetBlock.FirstBodyParagraph;
+            return null;
 
         if (string.IsNullOrWhiteSpace(normalizedContent.Heading) && normalizedContent.Paragraphs.Count <= 1)
         {
@@ -645,7 +713,14 @@ internal static class DocxOriginalFormatMerger
                 return nonListParagraph;
         }
 
-        return targetBlock.FirstBodyParagraph ?? bodyParagraphs.FirstOrDefault();
+        return bodyParagraphs.FirstOrDefault(paragraph => !IsListLikeParagraph(paragraph))
+               ?? bodyParagraphs.FirstOrDefault();
+    }
+
+    private static bool IsCenteredParagraph(Paragraph paragraph)
+    {
+        var justification = paragraph.ParagraphProperties?.Justification?.Val?.Value;
+        return justification == JustificationValues.Center;
     }
 
     private static bool IsListLikeParagraph(Paragraph paragraph)
@@ -661,6 +736,78 @@ internal static class DocxOriginalFormatMerger
             return true;
 
         return false;
+    }
+
+    private static bool IsStandaloneStructure(string? structure)
+    {
+        return structure?.Trim().ToLowerInvariant() is "article" or "clause" or "section";
+    }
+
+    private static Paragraph? FindListParagraphTemplate(
+        DocxBlock? targetBlock,
+        IReadOnlyList<DocxBlock> blocks,
+        Body body)
+    {
+        return targetBlock?.Paragraphs.FirstOrDefault(IsListLikeParagraph)
+               ?? blocks
+                   .SelectMany(block => block.Paragraphs)
+                   .FirstOrDefault(IsListLikeParagraph)
+               ?? body.Descendants<Paragraph>().FirstOrDefault(IsListLikeParagraph);
+    }
+
+    private static bool TryStripListItemMarker(string text, out string itemText)
+    {
+        var normalized = NormalizeOperationText(text);
+        var marker = ListItemMarkerPattern.Match(normalized);
+        if (!marker.Success)
+        {
+            itemText = normalized;
+            return false;
+        }
+
+        itemText = normalized[marker.Length..].Trim();
+        return itemText.Length > 0;
+    }
+
+    private static int? CreateRestartedListNumberingId(
+        NumberingDefinitionsPart? numberingPart,
+        Paragraph? listTemplate)
+    {
+        var sourceNumberingId = listTemplate?
+            .ParagraphProperties?
+            .NumberingProperties?
+            .NumberingId?
+            .Val?
+            .Value;
+
+        var numbering = numberingPart?.Numbering;
+        if (sourceNumberingId is null || numbering is null)
+            return null;
+
+        var sourceNumbering = numbering.Elements<NumberingInstance>()
+            .FirstOrDefault(numberingInstance =>
+                numberingInstance.NumberID?.Value == sourceNumberingId.Value);
+        var abstractNumberingId = sourceNumbering?.AbstractNumId?.Val?.Value;
+        if (abstractNumberingId is null)
+            return null;
+
+        var nextNumberingId = numbering.Elements<NumberingInstance>()
+            .Select(numberingInstance => numberingInstance.NumberID?.Value ?? 0)
+            .DefaultIfEmpty(0)
+            .Max() + 1;
+
+        var restartedNumbering = new NumberingInstance
+        {
+            NumberID = nextNumberingId
+        };
+        restartedNumbering.Append(new AbstractNumId { Val = abstractNumberingId.Value });
+        var levelOverride = new LevelOverride { LevelIndex = 0 };
+        levelOverride.Append(new StartOverrideNumberingValue { Val = 1 });
+        restartedNumbering.Append(levelOverride);
+        numbering.Append(restartedNumbering);
+        numbering.Save();
+
+        return nextNumberingId;
     }
 
     private static bool ShouldUseBodyTemplateForHeading(DocxBlock? targetBlock, string? heading)
@@ -723,12 +870,35 @@ internal static class DocxOriginalFormatMerger
 
     private static Paragraph? FindSignatureParagraph(IReadOnlyList<DocxBlock> blocks, Body body)
     {
-        var signatureBlock = blocks.FirstOrDefault(block => block.IsSignatureBlock);
-        if (signatureBlock is not null)
-            return signatureBlock.StartParagraph;
-
+        // Return the exact signature marker. A legal section block may span
+        // several paragraphs and merely contain signatures near its end;
+        // returning the block start would insert clauses far too early.
         return body.Descendants<Paragraph>()
-            .FirstOrDefault(paragraph => SignaturePattern.IsMatch(GetParagraphText(paragraph)));
+            .FirstOrDefault(paragraph => IsSignatureText(GetParagraphText(paragraph)));
+    }
+
+    private static bool IsSignatureText(string? text)
+    {
+        var canonical = CanonicalizeHeadingText(text);
+        if (string.IsNullOrWhiteSpace(canonical))
+            return false;
+
+        if (canonical.Contains("EN FE DE LO CUAL", StringComparison.Ordinal) ||
+            canonical.Contains("HECHO Y FIRMADO", StringComparison.Ordinal) ||
+            canonical.Contains("SIGNATURE", StringComparison.Ordinal) ||
+            canonical.StartsWith("FIRMAS", StringComparison.Ordinal) ||
+            canonical.StartsWith("ACEPTACION", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        // Role labels are signature markers only when the complete paragraph
+        // is short. Contract prose frequently contains "por EL CLIENTE" and
+        // must never be mistaken for the signature section.
+        return canonical.Length <= 80 &&
+               Regex.IsMatch(
+                   canonical,
+                   @"^POR\s+(?:EL\s+)?(?:CLIENTE|PROVEEDOR)\s*:?$");
     }
 
     private static Paragraph? FindPlaceholderParagraph(Body body)
@@ -775,12 +945,16 @@ internal static class DocxOriginalFormatMerger
         Paragraph? template,
         string text,
         bool preserveDirectFormatting,
-        bool suppressUnderline = false)
+        bool suppressUnderline = false,
+        int? numberingId = null)
     {
         var paragraph = new Paragraph();
 
         if (template?.ParagraphProperties is not null)
             paragraph.ParagraphProperties = (ParagraphProperties)template.ParagraphProperties.CloneNode(true);
+
+        if (numberingId is not null && paragraph.ParagraphProperties?.NumberingProperties is { } numberingProperties)
+            numberingProperties.NumberingId = new NumberingId { Val = numberingId.Value };
 
         var run = new Run();
         var templateRunProperties = template?.Elements<Run>()
@@ -802,6 +976,28 @@ internal static class DocxOriginalFormatMerger
 
         paragraph.Append(run);
         return paragraph;
+    }
+
+    private static void EnsureMinimumParagraphSpacing(
+        Paragraph paragraph,
+        uint? beforeTwips = null,
+        uint? afterTwips = null)
+    {
+        paragraph.ParagraphProperties ??= new ParagraphProperties();
+        paragraph.ParagraphProperties.SpacingBetweenLines ??= new SpacingBetweenLines();
+        var spacing = paragraph.ParagraphProperties.SpacingBetweenLines;
+
+        if (beforeTwips is not null &&
+            (!uint.TryParse(spacing.Before?.Value, out var existingBefore) || existingBefore < beforeTwips.Value))
+        {
+            spacing.Before = beforeTwips.Value.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (afterTwips is not null &&
+            (!uint.TryParse(spacing.After?.Value, out var existingAfter) || existingAfter < afterTwips.Value))
+        {
+            spacing.After = afterTwips.Value.ToString(CultureInfo.InvariantCulture);
+        }
     }
 
     private static RunProperties? CloneRunProperties(
@@ -944,8 +1140,22 @@ internal sealed record DocxBlockSummary(
 internal sealed record DocxMergeOperation
 {
     public string? TargetBlockId { get; init; }
+    [JsonPropertyName("target_block_id")]
+    public string? TargetBlockIdAlias { get; init; }
     public string? Placement { get; init; }
     public string? SourceClauseId { get; init; }
+    [JsonPropertyName("clause_id")]
+    public string? SourceClauseIdAlias { get; init; }
+    public string? Action { get; init; }
+    public string? Structure { get; init; }
+    [JsonPropertyName("unit")]
+    public string? StructureAlias { get; init; }
+    [JsonPropertyName("unidad juridica")]
+    public string? LegalUnitAlias { get; init; }
+    public List<int> SourceParagraphIndexes { get; init; } = [];
+    [JsonPropertyName("source_paragraph_indexes")]
+    public List<int> SourceParagraphIndexesAlias { get; init; } = [];
+    public double? Confidence { get; init; }
     public string? Heading { get; init; }
     public string? Content { get; init; }
     public List<string> Paragraphs { get; init; } = [];
@@ -956,6 +1166,12 @@ internal sealed record DocxMergePlan
 {
     public string? Summary { get; init; }
     public List<DocxMergeOperation> Operations { get; init; } = [];
+    [JsonPropertyName("clauses")]
+    public List<DocxMergeOperation> ClausesAlias { get; init; } = [];
+    [JsonPropertyName("decisions")]
+    public List<DocxMergeOperation> DecisionsAlias { get; init; } = [];
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement> AdditionalProperties { get; init; } = [];
 }
 
 internal sealed record DocxBlock(
